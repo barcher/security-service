@@ -1,0 +1,17 @@
+.DS_Store
+.claude/settings.local.json
+build/
+.gradle/
+.idea/
+.kotlin/
+.env
+.env.*
+!.env.example
+
+# mTLS secrets for local dev — never commit
+secrets/
+*.key
+*.crt
+*.p12
+*.jks
+!docs/sample.crt
