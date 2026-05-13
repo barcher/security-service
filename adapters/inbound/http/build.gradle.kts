@@ -14,6 +14,7 @@ dependencies {
     implementation(project(":application"))
     implementation(project(":domain"))
     implementation(libs.kotlin.stdlib)
+    implementation(libs.kotlinx.datetime)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.netty)
@@ -32,6 +33,9 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.bcprov.jdk18on)
+    testImplementation(libs.bcpkix.jdk18on)
+    testImplementation(libs.ktor.client.content.negotiation)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
