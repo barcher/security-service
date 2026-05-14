@@ -12,9 +12,10 @@ allowlist fails CI.
 | `README.md` | ✅ this file | — | Index of allowed files + ownership. |
 | `MTLS.md` | ✅ written | Stream B → E | mTLS contract, cert generation, `PeerCertChainExtractor` evolution. |
 | `RATE_LIMITING.md` | ✅ written | Stream B → C | Per-subject token bucket on `/v1/dek/unwrap`, env-var contract, scale-out caveats. |
-| `AUDIT_LOG.md` | ⏳ Stream C | Stream C | HMAC-SHA-512 row-chain schema + verification protocol from proposal §10. |
-| `KEK_LIFECYCLE.md` | ⏳ Stream C | Stream C | STAGED → ACTIVE → PRIOR → RETIRED state machine + rotation sequence from proposal §8. |
-| `MIGRATIONS.md` | ⏳ Stream C | Stream C | Flyway migration index for the security service's own MySQL. |
+| `AUDIT_LOG.md` | ✅ written | Stream C | HMAC-SHA-512 row-chain schema + verification protocol from proposal §10. |
+| `KEK_LIFECYCLE.md` | ✅ written | Stream C | STAGED → ACTIVE → PRIOR → RETIRED state machine + rotation sequence from proposal §8. |
+| `MIGRATIONS.md` | ✅ written | Stream C | Flyway migration index for the security service's own MySQL. |
+| `SECURITY_SCORECARD.md` | ✅ written | Re-graded each stream | Operator-facing posture snapshot: TLS profile, key isolation, audit chain, rate limiting, FedRAMP control crosswalk. |
 | `DEPLOYMENT.md` | ⏳ Stream E | Stream E | docker-compose stack, k3s topology (§3.3, §3.4), secrets layout. |
 | `CERT_GENERATION.md` | ⏳ Stream E | Stream E | OpenSSL recipes for the PKCS12 server + client keystores (ECDSA P-384). |
 

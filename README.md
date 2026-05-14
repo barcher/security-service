@@ -18,7 +18,7 @@ process. Ticket-level decomposition lives in
 |--------|--------|-------|
 | **A** — Skeleton + crypto core (`SKS-A01..A06`) | ✅ complete | Gradle layout, ML-KEM service, HKDF-SHA-512 wrap, KekProviderPort, CryptoKeyServicePort byte-identical to monolith copy |
 | **B** — HTTP API + mTLS (`SKS-B01..B06`) | ✅ complete | `/v1/health`, `/v1/dek/{generate,wrap,unwrap,rewrap}`, `/v1/admin/{rotate-kek,key-status}`, mTLS auth + audit + per-subject rate limit |
-| **C** — DB schema + Quartz jobs + audit chain (`SKS-C01..C09`) | ⏳ next | own MySQL, Flyway V1–V3, persistent audit log with HMAC-SHA-512 row chain, 6 Quartz jobs |
+| **C** — DB schema + Quartz jobs + audit chain (`SKS-C01..C10`) | ✅ complete | own MySQL (env-gated), Flyway V1–V3, persistent audit log with HMAC-SHA-512 row chain, 6 Quartz jobs + scheduler, Stream-C docs |
 | **D** — Monolith integration (`SKS-D01..D05`) | planned | `RemoteCryptoKeyServiceAdapter` in `scaffold/` |
 | **E** — Cutover (`SKS-E01..E05`) | planned | docker-compose stack, mTLS cert generation, legacy envelope rewrite |
 | **F** — Docs + ArchUnit + eval (`SKS-F01..F04`) | planned | S-1..S-9 boundary tests, cross-repo port byte-identity check (S-9) |
