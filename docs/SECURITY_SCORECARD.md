@@ -8,12 +8,12 @@ This file is kept current per ticket: each stream's tickets either toggle a stat
 **Planned** / **Partial** to **Implemented**, or add a new row. ArchUnit rule **S-7**
 (Stream F) blocks the addition of any new doc that isn't in `docs/README.md`'s allowlist.
 
-> Re-graded at each stream's close. **Last update:** Stream F complete — ArchUnit M-1..M-6
-> on the monolith side + S-4..S-9 on the security-service side enforce the boundary at
-> CI time. Cross-repo `CryptoKeyServicePort.kt` byte-identity (S-9) protected against
-> drift. Docs allowlist (S-7) wired via `DocsAllowlistTest`. ARCHITECTURE.md sections
-> added on both repos (§14); k3s proposal rewritten with §0 Phase-14 amendment covering
-> namespace + mesh + network-policy + Ingress-deny posture.
+> Re-graded at each stream's close. **Last update:** Stream G kickoff — `EncryptedColumnWriter`
+> facade introduced (P14.1 sibling-column threading). Reader implements the three-step
+> rule (proposal §7.1.1). Canonical V112 sibling-column migration template landed for
+> `principal_dining_sessions`; SKS-G03..G09 follow the template per-table. SKS-G01
+> schema linter present but `@Disabled` until SKS-G09 lands — code review owns the
+> "new encrypted column needs siblings" check until then.
 
 ## Posture summary
 
@@ -119,6 +119,17 @@ Reference: [`AUDIT_LOG.md`](AUDIT_LOG.md), [`KEK_LIFECYCLE.md`](KEK_LIFECYCLE.md
 | Pre-cutover legacy reference set is explicit + small | `PHASE_14_LEGACY_EXEMPTIONS = { Application.kt, AppModule.kt, FinancialModule.kt, DekWrappedStringEncryptor.kt }` — 4 files, each tied to an SKS-D04/E05 deletion | `CryptoModuleOutwardBoundaryTest.kt` |
 
 **FedRAMP mapping:** CM-2 (baseline configuration — boundary rules are the baseline), CM-4 (security impact analysis — every commit's diff is checked against M-1..M-6 / S-4..S-9), SI-7 (software / firmware integrity — cross-repo port byte-identity catches drift).
+
+### Stream G (P14.1) — Envelope-format sibling columns
+
+| Control | Implementation | Reference |
+|---------|----------------|-----------|
+| Schema linter for paired sibling columns | `EncryptedColumnSchemaLinterTest` — `@Disabled` until SKS-G09 lands; then forward-only guard | `scaffold/adapters/outbound/persistence/src/test/.../EncryptedColumnSchemaLinterTest.kt` |
+| `EncryptedColumnWriter` facade — 3-step reader rule | Sibling → prefix → plaintext (fail-closed on registered-encrypted with neither) | `scaffold/application/.../ports/EncryptedColumnWriter.kt` + `scaffold/infrastructure/.../security/DekWrappedEncryptedColumnWriter.kt` |
+| Producer always emits envelope-format sibling | Writer returns `EncryptedTriplet(ciphertext, "v0", null)` for encrypted columns | same |
+| Canonical sibling-column migration template | `V112__sks_g02_dining_sessions_sibling_columns.sql` — paired `<col>_envelope_format` + `<col>_dek_handle` per encrypted column, backfilled from value-prefix | `scaffold/infrastructure/src/main/resources/db/migration/V112__*.sql` |
+
+**FedRAMP mapping:** SC-28 (info at rest — adding format/handle siblings prepares for opaque ciphertext without sacrificing readability during transition), CM-3 (configuration change control — every new encrypted column requires a paired-column migration; enforced post-G09).
 
 ### Rate limiting
 
