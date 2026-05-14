@@ -8,16 +8,18 @@ This file is kept current per ticket: each stream's tickets either toggle a stat
 **Planned** / **Partial** to **Implemented**, or add a new row. ArchUnit rule **S-7**
 (Stream F) blocks the addition of any new doc that isn't in `docs/README.md`'s allowlist.
 
-> Generated against Stream C completion. Re-evaluate at each subsequent stream's close.
+> Re-graded at each stream's close. **Last update:** Stream D in flight — monolith-side
+> `RemoteCryptoKeyServiceAdapter` lands (TLS 1.3 + ECDSA P-384 client, retry with
+> exponential backoff, fail-closed on connection error).
 
 ## Posture summary
 
-| Dimension | Score | Status as of Stream C |
+| Dimension | Score | Status as of Stream D |
 |-----------|-------|------------------------|
-| **Key isolation** | A | KEK held in memory only; mounted via `FileMountKekProvider`; never on disk in plaintext; never in the monolith repo. |
-| **Algorithm modernity** | A | ML-KEM-768 (FIPS 203) + HKDF-SHA-512 + AES-256-GCM. TLS 1.3 + ECDSA P-384. No legacy fallback. |
+| **Key isolation** | A | KEK held in memory only; mounted via `FileMountKekProvider`; never on disk in plaintext; **Stream D**: monolith never imports `MlKemService` directly in prod-wired paths — only `RemoteCryptoKeyServiceAdapter` reaches the KEK. |
+| **Algorithm modernity** | A | ML-KEM-768 (FIPS 203) + HKDF-SHA-512 + AES-256-GCM. TLS 1.3 + ECDSA P-384 on both server (security-service) and client (monolith `RemoteCryptoKeyServiceAdapter`). No legacy fallback. |
 | **Audit integrity** | A | HMAC-SHA-512 row chain keyed by independent `AUDIT_HMAC_KEY`. Chain-break is structural tamper evidence. |
-| **Authentication** | A− | mTLS on every endpoint, including `/v1/health`. **Caveat:** real cert-chain extractor lands in Stream E; Stream-C default is deny-all (fail-closed). |
+| **Authentication** | A− | mTLS on every endpoint, including `/v1/health`. **Stream D**: monolith-side client is wired via `RemoteCryptoKeyServiceAdapter` — TLS 1.3 only, ECDSA P-384, exponential-backoff retry, fail-closed on connection error. **Caveat:** real cert-chain *extractor* on the server still lands in Stream E (deny-all default in `SecurityServiceModule`). |
 | **Authorization** | A | Admin endpoints gated on `AdminAllowList` subject DN; ADMIN_FORBIDDEN audit on every reject. |
 | **Rate limiting** | B+ | Per-subject token bucket on `/v1/dek/unwrap`. **Caveat:** local-process state — multi-replica scale-out requires a shared limiter (Stream F follow-on). |
 | **Audit retention** | A | 7-year retention floor (FedRAMP AU-11). Cold-storage gate prevents deletion before mirror confirmation. |
@@ -59,7 +61,7 @@ key is never derived from the KEK.
 
 Reference: [`AUDIT_LOG.md`](AUDIT_LOG.md), [`KEK_LIFECYCLE.md`](KEK_LIFECYCLE.md).
 
-### Authentication + authorization
+### Authentication + authorization (server side)
 
 | Control | Implementation | Reference |
 |---------|----------------|-----------|
@@ -69,7 +71,20 @@ Reference: [`AUDIT_LOG.md`](AUDIT_LOG.md), [`KEK_LIFECYCLE.md`](KEK_LIFECYCLE.md
 | Admin allow-list | RFC2253 subject DN match (`SECURITY_ADMIN_SUBJECTS` env) | `application/ports/AdminAllowList.kt` |
 | Audit on authz fail | `ADMIN_FORBIDDEN` audit row + HTTP 403 | `adapters/inbound/http/AdminRoutes.kt` |
 
-**FedRAMP mapping:** IA-2 (identification), AC-3 (access enforcement), AU-2 (auditable events).
+### Monolith client (Stream D)
+
+| Control | Implementation | Reference |
+|---------|----------------|-----------|
+| HTTPS only — non-HTTPS URL rejected at boot | `RemoteCryptoKeyServiceConfig.init` `require(baseUrl.startsWith("https://"))` | `scaffold/.../RemoteCryptoKeyServiceConfig.kt` |
+| TLS 1.3 binding at SSLContext | `SSLContext.getInstance("TLSv1.3")` | `scaffold/.../RemoteCryptoKeyServiceSslContext.kt` |
+| ECDSA P-384 client cert (PEM) | PKCS#8 PEM loaded via BC PEMParser; encrypted PEM rejected | same |
+| JVM default truststore NOT consulted | Only the configured CA bundle is trusted via custom `TrustManagerFactory` | same |
+| Fail-closed on connection error | `RemoteCryptoKeyServiceAdapter.ensureOk` throws `CryptoServiceUnavailable` on 5xx + non-OK | `scaffold/.../RemoteCryptoKeyServiceAdapter.kt` |
+| Exponential-backoff retry on transient failures | Ktor `HttpRequestRetry` plugin; default 3 retries; bounded by config | same |
+| Mode resolution logged at boot | `cryptoModeLogger.info(...)` reports the bound adapter | `scaffold/.../infrastructure/di/AppModule.kt` `resolveCryptoKeyService` |
+| Local-dev mode loud warning | `LocalDevCryptoKeyServiceAdapter.init { logger.warn(...) }` once per process | `scaffold/.../LocalDevCryptoKeyServiceAdapter.kt` |
+
+**FedRAMP mapping:** IA-2 (identification), AC-3 (access enforcement), AU-2 (auditable events), SC-8 (transmission confidentiality).
 
 ### Rate limiting
 
