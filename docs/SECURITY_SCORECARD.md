@@ -8,12 +8,12 @@ This file is kept current per ticket: each stream's tickets either toggle a stat
 **Planned** / **Partial** to **Implemented**, or add a new row. ArchUnit rule **S-7**
 (Stream F) blocks the addition of any new doc that isn't in `docs/README.md`'s allowlist.
 
-> Re-graded at each stream's close. **Last update:** Stream E in flight — docker-compose
-> stack (security-app + security_db on named networks), DEK import CLI, monolith-side
-> `LegacyEnvelopeRewriteJob` + state table (V111). KEK material moves from env vars to
-> docker secrets at `/run/secrets/security-service-kek/`. The `principal_encryption_keys`
-> table drop is documented as an operator step (§6 of DEPLOYMENT.md) rather than a
-> Flyway tripwire — safer dev posture.
+> Re-graded at each stream's close. **Last update:** Stream F complete — ArchUnit M-1..M-6
+> on the monolith side + S-4..S-9 on the security-service side enforce the boundary at
+> CI time. Cross-repo `CryptoKeyServicePort.kt` byte-identity (S-9) protected against
+> drift. Docs allowlist (S-7) wired via `DocsAllowlistTest`. ARCHITECTURE.md sections
+> added on both repos (§14); k3s proposal rewritten with §0 Phase-14 amendment covering
+> namespace + mesh + network-policy + Ingress-deny posture.
 
 ## Posture summary
 
@@ -104,6 +104,21 @@ Reference: [`AUDIT_LOG.md`](AUDIT_LOG.md), [`KEK_LIFECYCLE.md`](KEK_LIFECYCLE.md
 | No-tripwire posture: drop is NOT a Flyway migration | (Explicit design decision — would crash every dev pull) | items.md SKS-E04 |
 
 **FedRAMP mapping:** SC-7 (boundary protection), SC-28 (info at rest), AU-9 (audit info protection — chain remains intact across the cutover).
+
+### Stream F — Boundary enforcement + documentation lock-in
+
+| Control | Implementation | Reference |
+|---------|----------------|-----------|
+| Monolith M-1..M-6 ArchUnit suite — runs in CI | `CryptoModuleOutwardBoundaryTest.kt` (extended to 8 rules, 8 tests) | `scaffold/infrastructure/src/test/.../security/` |
+| Security-service S-4..S-8a ArchUnit suite | `SecurityBoundaryArchTest.kt` (5 rules) | `security-service/infrastructure/src/test/.../infrastructure/` |
+| Cross-repo CryptoKeyServicePort.kt byte-identity (S-9) | `CryptoKeyServicePortIdentityTest.kt` (JUnit, skips when scaffold not co-checked-out) | same |
+| Docs allowlist enforcement (S-7) | `DocsAllowlistTest.kt` — 3 tests cover present/missing/no-subdirs invariants | same |
+| ARCHITECTURE.md kept in sync across `scaffold/docs/` and `meta-project/context/` | §14 added with identical content; mirroring is mandated by CLAUDE.md "Ongoing documentation concern" rule | `scaffold/docs/ARCHITECTURE.md` §14 + `meta-project/context/ARCHITECTURE.md` §14 |
+| k3s deployment proposal includes Phase 14 amendment | §0 prepended: 2-namespace layout, Linkerd mesh, 4 explicit NetworkPolicies, no public ingress to security-app | `scaffold/docs/proposals/k3s_self_hosted_deployment.md` §0 |
+| CLAUDE.md Phase 14 rule current-state subsection | Operators reading the rules cold know which rules are pre-cutover vs post-cutover | `meta-project/CLAUDE.md` "Shared Key Service" §current-state |
+| Pre-cutover legacy reference set is explicit + small | `PHASE_14_LEGACY_EXEMPTIONS = { Application.kt, AppModule.kt, FinancialModule.kt, DekWrappedStringEncryptor.kt }` — 4 files, each tied to an SKS-D04/E05 deletion | `CryptoModuleOutwardBoundaryTest.kt` |
+
+**FedRAMP mapping:** CM-2 (baseline configuration — boundary rules are the baseline), CM-4 (security impact analysis — every commit's diff is checked against M-1..M-6 / S-4..S-9), SI-7 (software / firmware integrity — cross-repo port byte-identity catches drift).
 
 ### Rate limiting
 
