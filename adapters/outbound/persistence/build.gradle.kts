@@ -36,6 +36,22 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-tasks.withType<Test> {
-    useJUnitPlatform()
+// Unit tests: exclude @Tag("integration") so `./gradlew test` runs without Docker.
+tasks.named<Test>("test") {
+    useJUnitPlatform {
+        excludeTags("integration")
+    }
+    description = "Runs unit tests only (excludes @Tag(\"integration\") tests)"
+}
+
+// Integration tests: only @Tag("integration") tests — requires Docker with MySQL 8.0
+tasks.register<Test>("integrationTest") {
+    useJUnitPlatform {
+        includeTags("integration")
+    }
+    group = "verification"
+    description = "Runs integration tests (requires Docker)"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    shouldRunAfter("test")
 }

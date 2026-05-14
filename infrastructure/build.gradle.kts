@@ -10,7 +10,7 @@ kotlin {
 }
 
 application {
-    mainClass.set("com.workautomations.security.infrastructure.ApplicationKt")
+    mainClass.set("com.shared.security.infrastructure.ApplicationKt")
 }
 
 ktor {
@@ -28,6 +28,8 @@ dependencies {
     implementation(project(":adapters:inbound:http"))
     implementation(project(":adapters:inbound:scheduler"))
     implementation(project(":adapters:outbound:persistence"))
+    implementation(libs.exposed.core)
+    implementation(libs.exposed.jdbc)
     implementation(project(":adapters:outbound:crypto"))
 
     implementation(libs.kotlin.stdlib)

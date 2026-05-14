@@ -18,7 +18,7 @@ plugins {
 }
 
 allprojects {
-    group = "com.workautomations.security"
+    group = "com.shared.security"
     version = "1.0.0"
 }
 
