@@ -1,0 +1,154 @@
+# Cert generation for the security service
+
+Stream-E recipe for generating the dev CA + server cert + client certs needed to bring up
+the `--profile security` docker-compose stack. Production deployments substitute a real
+CA (e.g. cert-manager + Let's Encrypt, or a corporate PKI); the file layout below stays
+the same.
+
+The cryptographic profile is **ECDSA P-384 (secp384r1)** per proposal §7.2. RSA / EC P-256
+keys are NOT accepted by the server's TLS engine — generation MUST use the OpenSSL
+recipes below or an equivalent.
+
+## File layout (Stream E)
+
+```
+scaffold/secrets/security-service/
+├── ml_kem_public_key       # base64 ML-KEM-768 public key (1184 raw → ~1580 base64)
+├── ml_kem_private_key      # base64 ML-KEM-768 private key (2400 raw → ~3204 base64)
+├── audit_hmac_key          # base64 HMAC-SHA-512 key, ≥32 raw bytes
+├── keystore.p12            # PKCS12 — server cert + private key, alias=security-service
+├── truststore.p12          # PKCS12 — CA cert that signs valid clients
+└── monolith-client.{pem,key}  # PEM cert + PKCS#8 key for the scaffold `app` container
+└── ca.pem                  # PEM CA (mounted into monolith as SECURITY_SERVICE_CA_PATH)
+```
+
+`scaffold/secrets/` is gitignored. Operators generate locally with the recipe below or via
+their secret-management tooling.
+
+## Step 1 — generate the CA
+
+```bash
+mkdir -p scaffold/secrets/security-service
+cd scaffold/secrets/security-service
+
+# CA private key (ECDSA P-384)
+openssl ecparam -name secp384r1 -genkey -noout -out ca.key
+
+# Self-signed CA cert, 10-year validity for dev
+openssl req -x509 -new -key ca.key -sha384 -days 3650 \
+    -subj "/CN=WorkAutomations Dev CA/O=WorkAutomations/L=Local" \
+    -out ca.pem
+```
+
+## Step 2 — server cert for `security-app`
+
+```bash
+# Server private key
+openssl ecparam -name secp384r1 -genkey -noout -out server.key
+
+# CSR
+openssl req -new -key server.key -sha384 \
+    -subj "/CN=security-app/O=WorkAutomations/L=Local" \
+    -out server.csr
+
+# SAN config (security-app must be reachable as `security-app` inside compose,
+# and `localhost` for ad-hoc curl probes)
+cat > server.cnf <<'EOF'
+subjectAltName = DNS:security-app, DNS:localhost, IP:127.0.0.1
+EOF
+
+# Signed by the CA
+openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+    -days 365 -sha384 -extfile server.cnf -out server.pem
+
+# PKCS12 keystore (alias must match SECURITY_SERVICE_KEYSTORE_ALIAS, default `security-service`)
+openssl pkcs12 -export -inkey server.key -in server.pem -certfile ca.pem \
+    -name security-service -password pass:devpass -out keystore.p12
+```
+
+## Step 3 — truststore for `security-app`
+
+The truststore holds the CA cert. The server's TLS engine uses it to validate inbound
+client certs.
+
+```bash
+keytool -import -trustcacerts -noprompt -file ca.pem -alias dev-ca \
+    -keystore truststore.p12 -storetype PKCS12 -storepass devpass
+```
+
+## Step 4 — monolith client cert (`scaffold/app`)
+
+```bash
+openssl ecparam -name secp384r1 -genkey -noout -out monolith-client.key
+
+openssl req -new -key monolith-client.key -sha384 \
+    -subj "/CN=monolith,O=WorkAutomations,L=Local" \
+    -out monolith-client.csr
+
+openssl x509 -req -in monolith-client.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+    -days 365 -sha384 -out monolith-client.pem
+
+# PKCS#8 format — the monolith's RemoteCryptoKeyServiceSslContext REJECTS encrypted PEM,
+# and the BC PEMParser path needs PKCS#8 not the older OpenSSL EC format.
+openssl pkcs8 -topk8 -nocrypt -in monolith-client.key -out monolith-client-pkcs8.key
+mv monolith-client-pkcs8.key monolith-client.key
+```
+
+Wire into `scaffold/.env`:
+
+```env
+SECURITY_SERVICE_URL=https://security-app:8443
+SECURITY_SERVICE_CLIENT_CERT_PATH=./secrets/security-service/monolith-client.pem
+SECURITY_SERVICE_CLIENT_KEY_PATH=./secrets/security-service/monolith-client.key
+SECURITY_SERVICE_CA_PATH=./secrets/security-service/ca.pem
+```
+
+The monolith's [`RemoteCryptoKeyServiceSslContext`](../../scaffold/adapters/outbound/crypto/src/main/kotlin/com/workautomations/adapters/outbound/crypto/RemoteCryptoKeyServiceSslContext.kt)
+loads these directly.
+
+## Step 5 — admin client cert (operator workstation)
+
+A separate client cert lets an operator hit `/v1/admin/*` from their laptop. Same
+recipe; the subject DN must be added to `SECURITY_ADMIN_SUBJECTS` on `security-app`:
+
+```bash
+openssl ecparam -name secp384r1 -genkey -noout -out admin-client.key
+openssl req -new -key admin-client.key -sha384 \
+    -subj "/CN=admin-1,O=WorkAutomations,L=Local" \
+    -out admin-client.csr
+openssl x509 -req -in admin-client.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+    -days 365 -sha384 -out admin-client.pem
+```
+
+Then on `security-app`:
+
+```env
+SECURITY_ADMIN_SUBJECTS=CN=admin-1,O=WorkAutomations,L=Local
+```
+
+(RFC2253 DN form; semicolon-separated when multiple admin DNs are configured.)
+
+## Step 6 — ML-KEM keypair + audit HMAC key
+
+The KEK is generated by the security service's own key-pair generator. Until the
+`security-service-cli generate-kek` command exists (Stream-E follow-on), use the
+`MlKemService.generateKeyPair()` static via a one-off Kotlin script, or run the
+`MlKemCryptoKeyServiceTest` once and copy its generated base64 strings:
+
+```bash
+# ML-KEM-768 keypair — once generated, write to:
+echo -n '<base64 public key>'  > ml_kem_public_key
+echo -n '<base64 private key>' > ml_kem_private_key
+
+# HMAC-SHA-512 audit key — 64 bytes of randomness, base64-encoded
+openssl rand -base64 64 | tr -d '\n' > audit_hmac_key
+```
+
+## Production note
+
+In k3s prod (proposal §3.4), the cert chain is issued by cert-manager + a corporate CA;
+Linkerd's automatic mTLS provides the in-mesh cipher (TLS 1.3 + ECDSA P-256 by default,
+configurable to P-384). The `keystore.p12` / `truststore.p12` files become irrelevant
+because the application layer doesn't terminate TLS — Linkerd does it at the sidecar.
+What stays the same: the `SECURITY_ADMIN_SUBJECTS` allow-list, the ML-KEM keypair, and
+the audit HMAC key, all mounted as Kubernetes `Secret` volumes.

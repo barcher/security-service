@@ -19,8 +19,8 @@ process. Ticket-level decomposition lives in
 | **A** — Skeleton + crypto core (`SKS-A01..A06`) | ✅ complete | Gradle layout, ML-KEM service, HKDF-SHA-512 wrap, KekProviderPort, CryptoKeyServicePort byte-identical to monolith copy |
 | **B** — HTTP API + mTLS (`SKS-B01..B06`) | ✅ complete | `/v1/health`, `/v1/dek/{generate,wrap,unwrap,rewrap}`, `/v1/admin/{rotate-kek,key-status}`, mTLS auth + audit + per-subject rate limit |
 | **C** — DB schema + Quartz jobs + audit chain (`SKS-C01..C10`) | ✅ complete | own MySQL (env-gated), Flyway V1–V3, persistent audit log with HMAC-SHA-512 row chain, 6 Quartz jobs + scheduler, Stream-C docs |
-| **D** — Monolith integration (`SKS-D01..D05`) | planned | `RemoteCryptoKeyServiceAdapter` in `scaffold/` |
-| **E** — Cutover (`SKS-E01..E05`) | planned | docker-compose stack, mTLS cert generation, legacy envelope rewrite |
+| **D** — Monolith integration (`SKS-D01..D05`) | ✅ complete | `RemoteCryptoKeyServiceAdapter`, `LocalDevCryptoKeyServiceAdapter`, mode-aware DI resolver, HOCON + `docs/API_KEYS.md` |
+| **E** — Cutover (`SKS-E01..E06`) | ✅ complete | docker-compose stack (security profile, named networks, docker secrets), security-service Dockerfile, V4 legacy DEK provenance, `import-monolith-deks` CLI, V111 + `LegacyEnvelopeRewriteJob` use case + 5 tests, DEPLOYMENT.md cutover §6, CERT_GENERATION.md OpenSSL recipes. **SKS-D04 / SKS-E05** (deletion of in-process crypto + repos) deferred to the operator's post-cutover dwell step. |
 | **F** — Docs + ArchUnit + eval (`SKS-F01..F04`) | planned | S-1..S-9 boundary tests, cross-repo port byte-identity check (S-9) |
 
 ## What works right now (end of Stream B)

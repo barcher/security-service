@@ -4,6 +4,7 @@ import com.shared.security.adapters.inbound.http.auth.PeerCertChainExtractor
 import com.shared.security.adapters.inbound.http.auth.installMtlsAuth
 import com.shared.security.adapters.inbound.http.installHealthRoute
 import com.shared.security.application.ports.AuditLogPort
+import com.shared.security.infrastructure.cli.ImportMonolithDeksCli
 import com.shared.security.infrastructure.config.RateLimitConfig
 import com.shared.security.infrastructure.di.securityServiceModule
 import io.ktor.serialization.kotlinx.json.json
@@ -21,7 +22,23 @@ import org.slf4j.LoggerFactory
 
 private val logger = LoggerFactory.getLogger("com.shared.security.infrastructure.Application")
 
-fun main() {
+fun main(args: Array<String>) {
+    when (args.firstOrNull()) {
+        "import-monolith-deks" -> {
+            ImportMonolithDeksCli().run(args.drop(1))
+            return
+        }
+        null, "" -> {
+            // fall through to server start
+        }
+        else -> {
+            System.err.println(
+                "Unknown subcommand '${args[0]}'. Supported subcommands: import-monolith-deks. " +
+                    "Run with no arguments to start the HTTP server.",
+            )
+            kotlin.system.exitProcess(2)
+        }
+    }
     val port = System.getenv("SECURITY_SERVICE_PORT")?.toIntOrNull() ?: DEFAULT_PORT
     val host = System.getenv("SECURITY_SERVICE_HOST") ?: DEFAULT_HOST
     logger.info(

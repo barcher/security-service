@@ -8,9 +8,12 @@ This file is kept current per ticket: each stream's tickets either toggle a stat
 **Planned** / **Partial** to **Implemented**, or add a new row. ArchUnit rule **S-7**
 (Stream F) blocks the addition of any new doc that isn't in `docs/README.md`'s allowlist.
 
-> Re-graded at each stream's close. **Last update:** Stream D in flight — monolith-side
-> `RemoteCryptoKeyServiceAdapter` lands (TLS 1.3 + ECDSA P-384 client, retry with
-> exponential backoff, fail-closed on connection error).
+> Re-graded at each stream's close. **Last update:** Stream E in flight — docker-compose
+> stack (security-app + security_db on named networks), DEK import CLI, monolith-side
+> `LegacyEnvelopeRewriteJob` + state table (V111). KEK material moves from env vars to
+> docker secrets at `/run/secrets/security-service-kek/`. The `principal_encryption_keys`
+> table drop is documented as an operator step (§6 of DEPLOYMENT.md) rather than a
+> Flyway tripwire — safer dev posture.
 
 ## Posture summary
 
@@ -25,7 +28,7 @@ This file is kept current per ticket: each stream's tickets either toggle a stat
 | **Audit retention** | A | 7-year retention floor (FedRAMP AU-11). Cold-storage gate prevents deletion before mirror confirmation. |
 | **KEK rotation** | B | State machine implemented (STAGED → ACTIVE → PRIOR → RETIRED) with automatic retirement. **Caveat:** activation is operator-driven; automatic activation lands in Stream F. |
 | **Backup verification** | C | `KekBackupVerifyJob` infrastructure in place. **Caveat:** Stream-C wires a `NoOpKekBackupVerifier` that always returns Ok — real backup-store integration lands in Stream E. |
-| **Network topology** | B | Service designed for mTLS-only access. **Caveat:** docker-compose + Linkerd k3s wiring lands in Stream E. |
+| **Network topology** | A− | **Stream E**: docker-compose stack uses named networks (`app-net`, `security-net` with `internal: true`). Monolith reaches `security-app` only via `app-net`; `security_db` has no path to anything except `security-app` via internal `security-net`. **Caveat:** k3s Linkerd mesh manifests still pending a follow-on. |
 
 ## Controls
 
@@ -85,6 +88,22 @@ Reference: [`AUDIT_LOG.md`](AUDIT_LOG.md), [`KEK_LIFECYCLE.md`](KEK_LIFECYCLE.md
 | Local-dev mode loud warning | `LocalDevCryptoKeyServiceAdapter.init { logger.warn(...) }` once per process | `scaffold/.../LocalDevCryptoKeyServiceAdapter.kt` |
 
 **FedRAMP mapping:** IA-2 (identification), AC-3 (access enforcement), AU-2 (auditable events), SC-8 (transmission confidentiality).
+
+### Stream E — Cutover infrastructure
+
+| Control | Implementation | Reference |
+|---------|----------------|-----------|
+| Named-network isolation (`app-net` + `security-net` `internal: true`) | docker-compose stack | `scaffold/docker-compose.yml` |
+| KEK material via docker secrets (NOT env vars) on prod path | `KEK_MOUNT_DIR=/run/secrets/security-service-kek` | `docker-compose.yml` security-app service |
+| Server keystore + truststore mounted as docker secrets | `keystore.p12` + `truststore.p12` paths | same |
+| Compose profile guard (`security` profile) prevents accidental boot | `profiles: ["security"]` on both services | `docker-compose.yml` |
+| Idempotent legacy-DEK import (UNIQUE on `deks.legacy_key_id`) | V4 migration + ImportMonolithDeksCli check | `security-service/.../V4__legacy_dek_provenance.sql` |
+| Legacy envelope rewriter — state-tracked, resumable | `legacy_envelope_rewrite_state` table + `RunLegacyEnvelopeRewriteUseCase` | `scaffold/.../V111__create_legacy_envelope_rewrite_state.sql` |
+| Per-row JDBC transaction guarantee — partial crashes consistent | `LegacyEnvelopeRewriterPort.rewriteBatch` contract | `scaffold/.../LegacyEnvelopeRewritePort.kt` |
+| `principal_encryption_keys` drop is operator-gated documented step | DEPLOYMENT.md §6 pre-flight checklist | `security-service/docs/DEPLOYMENT.md` |
+| No-tripwire posture: drop is NOT a Flyway migration | (Explicit design decision — would crash every dev pull) | items.md SKS-E04 |
+
+**FedRAMP mapping:** SC-7 (boundary protection), SC-28 (info at rest), AU-9 (audit info protection — chain remains intact across the cutover).
 
 ### Rate limiting
 

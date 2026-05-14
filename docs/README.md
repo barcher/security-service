@@ -16,8 +16,8 @@ allowlist fails CI.
 | `KEK_LIFECYCLE.md` | ✅ written | Stream C | STAGED → ACTIVE → PRIOR → RETIRED state machine + rotation sequence from proposal §8. |
 | `MIGRATIONS.md` | ✅ written | Stream C | Flyway migration index for the security service's own MySQL. |
 | `SECURITY_SCORECARD.md` | ✅ written | Re-graded each stream | Operator-facing posture snapshot: TLS profile, key isolation, audit chain, rate limiting, FedRAMP control crosswalk. |
-| `DEPLOYMENT.md` | ⏳ Stream E | Stream E | docker-compose stack, k3s topology (§3.3, §3.4), secrets layout. |
-| `CERT_GENERATION.md` | ⏳ Stream E | Stream E | OpenSSL recipes for the PKCS12 server + client keystores (ECDSA P-384). |
+| `DEPLOYMENT.md` | ✅ written | Stream E | docker-compose stack, k3s topology (§3.3, §3.4), secrets layout. |
+| `CERT_GENERATION.md` | ✅ written | Stream E | OpenSSL recipes for the PKCS12 server + client keystores (ECDSA P-384). |
 
 Anything outside this list belongs in the top-level [`README.md`](../README.md), in
 [`.env.example`](../.env.example), or in the source itself as a KDoc block. No

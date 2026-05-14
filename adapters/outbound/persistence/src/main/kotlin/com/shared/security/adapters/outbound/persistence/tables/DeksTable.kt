@@ -12,5 +12,10 @@ object DeksTable : Table("deks") {
     val createdAt = timestamp("created_at")
     val updatedAt = timestamp("updated_at")
 
+    // Stream-E (V4) provenance — set by `import-monolith-deks` CLI; null for DEKs minted
+    // natively by the security service. UNIQUE index on this column makes the CLI
+    // structurally idempotent.
+    val legacyKeyId = varchar("legacy_key_id", length = 36).nullable().uniqueIndex("uk_deks_legacy_key_id")
+
     override val primaryKey: PrimaryKey = PrimaryKey(handle)
 }
