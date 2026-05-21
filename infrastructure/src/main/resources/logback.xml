@@ -1,5 +1,10 @@
 <configuration>
   <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <!--
+      Drops HikariCP wake-from-sleep noise on dev machines when
+      LOG_SUPPRESS_HIKARI_SLEEP_NOISE=true. Default off; prod is unaffected.
+    -->
+    <filter class="com.shared.security.infrastructure.logging.HikariSleepNoiseFilter"/>
     <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
       <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
     </encoder>
