@@ -17,7 +17,12 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.datetime)
     implementation(libs.koin.core)
-    implementation(libs.quartz)
+    implementation(libs.quartz) {
+        // c3p0 and mchange-commons-java are Quartz transitive dependencies. SecurityScheduler
+        // uses RAMJobStore — no JDBC connection provider is needed; c3p0 is never used.
+        exclude(group = "com.mchange", module = "c3p0")
+        exclude(group = "com.mchange", module = "mchange-commons-java")
+    }
     implementation(libs.logback.classic)
 
     testImplementation(libs.junit.jupiter)
