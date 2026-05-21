@@ -101,6 +101,7 @@ class DocsAllowlistTest {
                 "SECURITY_SCORECARD.md",
                 "DEPLOYMENT.md",
                 "CERT_GENERATION.md",
+                "TRUST_MODEL.md",
             )
     }
 }

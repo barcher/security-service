@@ -10,8 +10,14 @@ build/
 
 # mTLS secrets for local dev — never commit
 secrets/
+
+# Defence-in-depth: never commit key/keystore material even if it lands outside secrets/.
 *.key
 *.crt
 *.p12
 *.jks
+*.pfx
+*.pkcs8
+*-pkcs8.key
+*_hmac_key
 !docs/sample.crt

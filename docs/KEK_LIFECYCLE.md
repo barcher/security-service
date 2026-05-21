@@ -4,6 +4,14 @@ Every ML-KEM-768 keypair the security service has known about is represented as 
 the `keks` table (see [`MIGRATIONS.md`](MIGRATIONS.md)) progressing through a four-state
 machine. The state machine and rotation sequence are defined by proposal §8.
 
+> **Two distinct provisioning paths exist — pick the right one.** The CLI
+> (`./gradlew :infrastructure:run --args="generate-kek"`) is **bootstrap-only**; it mints
+> the very first current KEK on a fresh deployment (or rebuilds one from a disaster where
+> no current KEK material survived). The admin route (`POST /v1/admin/rotate-kek`) is the
+> only correct path once a current KEK is already running. See the
+> [Bootstrap vs rotation](#bootstrap-vs-rotation) section below — picking the wrong one
+> bypasses the audit chain or, worse, orphans live DEKs.
+
 ```
                    ┌─────────┐
    admin route ──▶ │ STAGED  │
@@ -26,6 +34,81 @@ machine. The state machine and rotation sequence are defined by proposal §8.
                    │ RETIRED │ ◀── audit anchor only; no DEK still references this row
                    └─────────┘
 ```
+
+## Bootstrap vs rotation
+
+There are exactly two paths that produce a new ML-KEM-768 keypair. They are NOT
+interchangeable — using one in the other's situation either bypasses required
+controls or orphans live data. The structural distinction:
+
+| Dimension | `generate-kek` CLI (bootstrap) | `POST /v1/admin/rotate-kek` (rotation) |
+|---|---|---|
+| When to use | Fresh deployment with no current KEK yet, or disaster recovery with no surviving current-KEK material. | Routine scheduled rotation, post-incident KEK roll, or any rotation where a current KEK is already serving traffic. |
+| Service running? | Not required. CLI is a local one-shot. | **Required** — generation flows through the live `MlKemCryptoKeyService`. |
+| Authentication | None — operator runs locally, captures stdout. | **mTLS + admin allowlist** (`SECURITY_ADMIN_SUBJECTS`). Anonymous or non-allowlisted DN → 403 + `ADMIN_FORBIDDEN` audit. |
+| Audit chain | None at mint time. First audit event is the subsequent `KEK_ACTIVATED` after the operator inserts the row. | Emits `KEK_ROTATED` tagged with operator subject DN; hashed into the audit chain. |
+| Output destination | stdout — operator pastes into `.env` (or HSM mount). | mTLS response body — operator captures and feeds into STAGED → ACTIVE flow. |
+| Pre-existing KEK gate | **Refuses** to run when `ML_KEM_PUBLIC_KEY_CURRENT` is already set; requires `--force` override for disaster recovery. | Requires a current KEK to be loaded; ungated otherwise (rotation is its purpose). |
+| Lifecycle row | Operator manually inserts STAGED row + activates after pasting env. | Operator inserts STAGED row + activates after capturing response — same downstream flow. |
+
+### Why both exist
+
+The admin route can't bootstrap because there's nothing to authenticate against (no
+admin cert path yet provisioned), no audit chain to anchor (the chain HMAC key may not
+yet be loaded), and no live `MlKemCryptoKeyService` to call (current KEK is its only
+construction dependency).
+
+The CLI can't replace rotation because it bypasses the audit chain, the mTLS proof of
+operator identity, and the lifecycle state machine — calling it on a live system would
+create unaudited key material and skip the STAGED → ACTIVE → PRIOR transitions that
+prevent orphaning DEKs (see [PRIOR → RETIRED](#prior--retired) — the reference guard
+is the load-bearing safety).
+
+### Bootstrap ceremony (first-time provisioning)
+
+1. From `security-service/`, run `./gradlew :infrastructure:run --args="generate-kek"`.
+2. Capture the printed `ML_KEM_PUBLIC_KEY_CURRENT=…` + `ML_KEM_PRIVATE_KEY_CURRENT=…`
+   lines from stdout.
+3. Capture the **fingerprint** printed to stderr; store out-of-band (paper / vault /
+   runbook) for later attestation against `GET /v1/admin/key-status`.
+4. Paste both KEY=VALUE lines into `security-service/.env` (or, in prod, install the
+   private key under the file-mount / HSM and keep the env-var form as recovery only).
+5. Restart the security service. The startup log should read
+   `CryptoKeyServicePort → MlKemCryptoKeyService (current=loaded, legacy=…)`.
+6. Run `GET /v1/admin/key-status` from an admin-allowlisted mTLS cert; confirm the
+   returned fingerprint matches the value captured in step 3.
+7. **From this point forward, all rotations use the admin route. The CLI must not run
+   again unless step 1 was destroyed by a disaster.**
+
+### Rotation ceremony (steady state)
+
+1. Operator's workstation calls `POST /v1/admin/rotate-kek` over mTLS with their admin
+   client cert.
+2. Capture response `newPublicKeyB64` + `newPrivateKeyB64`.
+3. Install the private key in the secret store (file mount / HSM).
+4. Insert a `keks` row with `status = 'STAGED'` referencing the new public key.
+5. Flip the row to `ACTIVE` — schema invariant demotes the previous ACTIVE → PRIOR.
+6. From the monolith, trigger `rewrapAllDeksForNewKek(newPublicKeyBytes)`; this rewraps
+   every DEK in `encryption_keys` under the new current KEK.
+7. `KekPriorTtlJob` retires the PRIOR row automatically once (a) the quiesce window
+   elapses AND (b) zero remaining DEK references point at it.
+
+The CLI does not appear anywhere in this loop.
+
+### Disaster-recovery override
+
+If the current KEK material is genuinely lost (e.g., the secret store is destroyed AND
+no backup survived), the CLI's `--force` flag overrides the structural gate:
+
+```
+./gradlew :infrastructure:run --args="generate-kek --force"
+```
+
+Using `--force` will REPLACE the configured current KEK with a freshly-minted one.
+**Every DEK wrapped under the old current KEK becomes permanently undecryptable** unless
+the old KEK material is also recoverable. The CLI prints a loud warning before
+generating. Reserve this for true incidents; document the recovery in the audit trail
+out-of-band.
 
 ## STAGED → ACTIVE
 

@@ -18,6 +18,7 @@ allowlist fails CI.
 | `SECURITY_SCORECARD.md` | ✅ written | Re-graded each stream | Operator-facing posture snapshot: TLS profile, key isolation, audit chain, rate limiting, FedRAMP control crosswalk. |
 | `DEPLOYMENT.md` | ✅ written | Stream E | docker-compose stack, k3s topology (§3.3, §3.4), secrets layout. |
 | `CERT_GENERATION.md` | ✅ written | Stream E | OpenSSL recipes for the PKCS12 server + client keystores (ECDSA P-384). |
+| `TRUST_MODEL.md` | ✅ written | Stream E follow-up | Self-contained architecture doc: three trust authorities (workload mTLS, ingress, KEK), why security-service IS the dev CA, prod replacement via Linkerd + HSM-backed offline trust anchor. |
 
 Anything outside this list belongs in the top-level [`README.md`](../README.md), in
 [`.env.example`](../.env.example), or in the source itself as a KDoc block. No

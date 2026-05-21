@@ -1,0 +1,38 @@
+# security-service — local development compose
+#
+# Self-contained: owns ONLY the security service's own infrastructure (MySQL for the
+# security_keys schema). Does not reference any sibling service.
+#
+# Dev usage (smoke-test §1): databases only. The JVM service runs on the host via
+#   ./gradlew :infrastructure:run
+# until the fully-containerised stack is ready.
+#
+# Production usage: the JVM container is built from `./Dockerfile` and run inside k3s
+# with Linkerd sidecar mTLS + HSM-mounted KEK; this compose file is dev-only.
+
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0.40
+    container_name: security-service-db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${SECURITY_DB_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${SECURITY_DB_NAME:-security_keys}
+      MYSQL_USER: ${SECURITY_DB_USER:-security}
+      MYSQL_PASSWORD: ${SECURITY_DB_PASSWORD:-changeme}
+    # Host port 3308 — port 3307 is already taken by the monolith's financial DB.
+    # Container port is the MySQL default (3306).
+    ports:
+      - "3308:3306"
+    volumes:
+      - security_db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  security_db_data:

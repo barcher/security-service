@@ -4,6 +4,8 @@ import com.shared.security.adapters.outbound.persistence.tables.AuditEventsTable
 import com.shared.security.application.ports.AuditEvent
 import com.shared.security.application.ports.AuditLogPort
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.Database
@@ -39,23 +41,31 @@ class ExposedAuditLogRepository(
     private val database: Database,
     private val hasher: AuditChainHasher,
 ) : AuditLogPort {
+    // Serializes concurrent writes within this process instance. The FOR UPDATE row lock
+    // in lockAndReadLatestHmac() handles inter-instance serialization, but within a single
+    // instance concurrent callers can deadlock on MySQL's reverse-order gap locks when both
+    // scan ORDER BY id DESC LIMIT 1 FOR UPDATE simultaneously. The mutex prevents that race.
+    private val writeMutex = Mutex()
+
     override suspend fun write(event: AuditEvent) {
-        // Coroutine → blocking JDBC bridge: Exposed's `transaction { }` is blocking; isolate it
-        // on the IO dispatcher so we do not pin the request-handling worker.
-        withContext(Dispatchers.IO) {
-            transaction(database) {
-                val prev = lockAndReadLatestHmac() ?: AuditChainHasher.INITIAL_PREV_HMAC
-                val row = hasher.hash(event, prev)
-                AuditEventsTable.insert {
-                    it[occurredAt] = event.occurredAt
-                    it[eventType] = event.eventType
-                    it[actorSubject] = event.actorSubject
-                    it[dekHandle] = event.dekHandle
-                    it[kekId] = event.kekId
-                    it[success] = event.success
-                    it[detailJson] = event.detailJson?.let { json -> Json.parseToJsonElement(json) }
-                    it[prevHmac] = prev
-                    it[rowHmac] = row
+        writeMutex.withLock {
+            // Coroutine → blocking JDBC bridge: Exposed's `transaction { }` is blocking; isolate it
+            // on the IO dispatcher so we do not pin the request-handling worker.
+            withContext(Dispatchers.IO) {
+                transaction(database) {
+                    val prev = lockAndReadLatestHmac() ?: AuditChainHasher.INITIAL_PREV_HMAC
+                    val row = hasher.hash(event, prev)
+                    AuditEventsTable.insert {
+                        it[occurredAt] = event.occurredAt
+                        it[eventType] = event.eventType
+                        it[actorSubject] = event.actorSubject
+                        it[dekHandle] = event.dekHandle
+                        it[kekId] = event.kekId
+                        it[success] = event.success
+                        it[detailJson] = event.detailJson?.let { json -> Json.parseToJsonElement(json) }
+                        it[prevHmac] = prev
+                        it[rowHmac] = row
+                    }
                 }
             }
         }

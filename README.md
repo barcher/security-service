@@ -108,12 +108,22 @@ for a real TLS handshake:
 | `POST /v1/dek/wrap` | mTLS | Wrap externally-provided 32-byte DEK | `CryptoRoutes.kt` |
 | `POST /v1/dek/unwrap` | mTLS, rate-limited | Unwrap a stored DEK | `CryptoRoutes.kt` |
 | `POST /v1/dek/rewrap` | mTLS | Re-wrap DEK under a new KEK pub key | `CryptoRoutes.kt` |
-| `POST /v1/admin/rotate-kek` | mTLS + admin | Generate next ML-KEM keypair | `AdminRoutes.kt` |
+| `POST /v1/admin/rotate-kek` | mTLS + admin | Generate next ML-KEM keypair (in-band rotation) | `AdminRoutes.kt` |
 | `GET /v1/admin/key-status` | mTLS + admin | Active KEK fingerprint + availability | `AdminRoutes.kt` |
 
 Every authenticated route propagates the caller's mTLS subject DN into every audit event
 written via `AuditLogPort`. Until Stream C, audit events go to SLF4J INFO; from Stream C
 onward they go to `security_keys.audit_events` with an HMAC-SHA-512 row chain.
+
+### CLI subcommands
+
+Local one-shot commands invoked via `./gradlew :infrastructure:run --args="…"` (or the
+shadow jar). The service does NOT need to be running.
+
+| Subcommand | Purpose | Notes |
+|------------|---------|-------|
+| `generate-kek` | **Bootstrap-only** ML-KEM-768 keypair generation for first-time provisioning or disaster recovery. | Refuses to run when a current KEK is already configured; pass `--force` to override. For in-band rotation use `POST /v1/admin/rotate-kek` — see [`KEK_LIFECYCLE.md`](docs/KEK_LIFECYCLE.md#bootstrap-vs-rotation). |
+| `import-monolith-deks` | One-shot import of legacy `principal_encryption_keys` rows from the monolith into the security-service `deks` table. | Requires a STAGED/ACTIVE row in `keks` and matching legacy KEK material in the file mount. |
 
 ## Configuration
 

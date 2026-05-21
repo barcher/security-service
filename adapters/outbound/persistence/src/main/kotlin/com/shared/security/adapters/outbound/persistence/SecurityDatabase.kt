@@ -50,10 +50,12 @@ class SecurityDatabase private constructor(
                         username = config.user
                         password = config.password
                         maximumPoolSize = config.poolSize
+                        minimumIdle = 2
                         driverClassName = DRIVER
-                        // The security service writes monotonically (audit log appends) and
-                        // performs short read transactions; long-held connections are an
-                        // anti-pattern. Tight timeouts surface stuck transactions fast.
+                        connectionTimeout = 30_000
+                        idleTimeout = 300_000
+                        maxLifetime = 900_000
+                        keepaliveTime = 60_000
                         isAutoCommit = false
                         transactionIsolation = "TRANSACTION_REPEATABLE_READ"
                     },

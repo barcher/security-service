@@ -28,17 +28,23 @@ The authentication path is split into three pieces, each with a clear boundary:
    call, or null when none is present. Source:
    [`adapters/inbound/http/.../auth/PeerCertChainExtractor.kt`](../adapters/inbound/http/src/main/kotlin/com/workautomations/security/adapters/inbound/http/auth/PeerCertChainExtractor.kt).
 
-   Two implementations are wired today:
-   - `DenyAllPeerCertChainExtractor` — returns null for every call. **The default DI binding
-     in `SecurityServiceModule`**, on purpose: until Stream E wires the real Netty/sidecar
-     extractor, every call returns 401. Misconfig surfaces as 100% rejection, never as
-     silent acceptance.
+   Three implementations are wired today:
+   - `NettySslPeerCertChainExtractor` — the production extractor. Reads the validated peer
+     cert chain from the underlying Netty `SslHandler`'s SSL session. Bound by
+     `SecurityServiceModule` automatically when `MtlsConfig.fromEnv()` returns a non-null
+     config (i.e. when the keystore + truststore env vars are set). Source:
+     [`adapters/inbound/http/.../auth/NettySslPeerCertChainExtractor.kt`](../adapters/inbound/http/src/main/kotlin/com/shared/security/adapters/inbound/http/auth/NettySslPeerCertChainExtractor.kt).
+   - `DenyAllPeerCertChainExtractor` — fail-closed fallback. Bound automatically when
+     `MtlsConfig.fromEnv()` returns null (i.e. when the keystore env vars are unset), so a
+     server that boots without TLS rejects every call with 401 rather than silently
+     accepting traffic. Plaintext mode is for `./gradlew :infrastructure:run` smoke checks
+     only and is never appropriate in deployed environments.
    - `TestPeerCertChainExtractor` — reads a synthetic chain from call attributes. Test-only.
 
-   Stream E adds the production extractor. The proposal §3.3 / §3.4 anticipates a Linkerd
-   service mesh terminating mTLS at a sidecar in k3s prod; the extractor will read the
-   PEM-encoded cert from a sidecar-injected header. In docker-compose dev, the extractor
-   reads from the Netty SSL session attached to the channel.
+   In docker-compose dev (and the equivalent `./gradlew :infrastructure:run` flow), the
+   Netty engine terminates TLS and `NettySslPeerCertChainExtractor` is active. In k3s
+   prod, Linkerd's sidecar terminates mTLS upstream and the extractor swaps for a
+   sidecar-header reader — see TRUST_MODEL.md §3.
 
 2. **`installMtlsAuth(extractor, auditLog)`** — Ktor `Application` extension. Installs an
    interceptor in the `Plugins` pipeline phase that:
@@ -75,16 +81,31 @@ Environment variables read by `MtlsConfig.fromEnv()`:
 | `SECURITY_SERVICE_TRUSTSTORE_PASSWORD` | — | yes |
 
 `MtlsConfig.fromEnv()` returns null when any required var is absent — the service falls
-back to plaintext mode in that case. Plaintext mode is fine for Stream A/B (the
-deny-all extractor rejects everything anyway) but **must not** ship to production. Stream E
-adds a startup check that refuses to boot in plaintext mode when an env flag indicates a
-production deployment.
+back to plaintext mode in that case. The startup log line is loud (`DEV-ONLY: starting
+security-service ... WITHOUT mTLS`) and the deny-all extractor rejects every authenticated
+endpoint with 401. Plaintext mode is for `./gradlew :infrastructure:run` smoke checks
+only; it **must not** ship to any deployed environment.
+
+## TLS termination wiring
+
+`Application.kt::buildServer` branches on `MtlsConfig.fromEnv()`:
+
+- When non-null: installs a Ktor `sslConnector` with the loaded keystore + truststore.
+  Ktor 3.x's Netty engine treats a connector with a configured truststore as mTLS-required
+  — any client that doesn't present a cert chaining to the truststore is rejected during
+  the TLS handshake before reaching application code.
+- When null: installs a plaintext `connector` and logs the loud `DEV-ONLY` warning above.
 
 ## Cert generation
 
-Stream E adds `CERT_GENERATION.md` with OpenSSL recipes for producing the dev CA, server
-cert, and client certs. Until then, the test path uses
-[`TestCertificateFactory`](../adapters/inbound/http/src/test/kotlin/com/workautomations/security/adapters/inbound/http/auth/TestCertificateFactory.kt),
+See [`CERT_GENERATION.md`](CERT_GENERATION.md) for the OpenSSL recipes producing the dev
+CA, server cert, and client certs. The fastest path is `./scripts/init-dev-certs.sh`,
+which generates everything into `./secrets/` idempotently and (with
+`--export-monolith-client-to <dir>`) ships the three client-facing files to the
+monolith's own `secrets/` directory.
+
+The test path uses
+[`TestCertificateFactory`](../adapters/inbound/http/src/test/kotlin/com/shared/security/adapters/inbound/http/auth/TestCertificateFactory.kt),
 which generates ephemeral self-signed ECDSA P-384 certs at test setup time via
 BouncyCastle's `JcaX509v3CertificateBuilder`.
 

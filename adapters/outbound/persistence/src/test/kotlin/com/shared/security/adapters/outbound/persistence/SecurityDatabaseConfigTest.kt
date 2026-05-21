@@ -10,8 +10,10 @@ class SecurityDatabaseConfigTest {
     private fun envOf(map: Map<String, String?>): (String) -> String? = { map[it] }
 
     @Test
-    fun `isEnabled defaults to false`() {
-        assertFalse(SecurityDatabaseConfig.isEnabled(envOf(emptyMap())))
+    fun `isEnabled defaults to true (SKS-E08 flip)`() {
+        // The DB-backed audit chain is the canonical posture; SECURITY_DB_ENABLED=false
+        // is now an explicit dev-only opt-out (boot-without-MySQL smoke checks).
+        assertTrue(SecurityDatabaseConfig.isEnabled(envOf(emptyMap())))
     }
 
     @Test

@@ -11,6 +11,18 @@ kotlin {
 
 application {
     mainClass.set("com.shared.security.infrastructure.ApplicationKt")
+    // SKS-H11: the .env loader uses reflection on java.util.Collections$UnmodifiableMap
+    // to inject entries into the process env. JDK 9+ blocks `setAccessible(true)` on
+    // `java.base/java.util` types unless the module is explicitly opened. Bake the flag
+    // into the distributed startup scripts AND the run task (Gradle's `application`
+    // plugin doesn't reliably propagate applicationDefaultJvmArgs to the `run` task
+    // across all Gradle versions, so we also set it directly on the task below).
+    applicationDefaultJvmArgs = listOf("--add-opens", "java.base/java.util=ALL-UNNAMED")
+}
+
+// Belt-and-suspenders for `./gradlew :infrastructure:run` — see comment in `application {}`.
+tasks.named<JavaExec>("run") {
+    jvmArgs("--add-opens", "java.base/java.util=ALL-UNNAMED")
 }
 
 ktor {
@@ -33,6 +45,7 @@ dependencies {
     implementation(project(":adapters:outbound:crypto"))
 
     implementation(libs.kotlin.stdlib)
+    implementation(libs.dotenv.kotlin)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.datetime)
@@ -59,4 +72,13 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+}
+
+// Run the application from the security-service root so relative paths in .env
+// (./secrets/keystore.p12, ./secrets/truststore.p12, KEK_MOUNT_DIR=./secrets, etc.)
+// resolve against the same directory the operator launches from. By default
+// Gradle's run task sets CWD to the module's projectDir (which would be
+// security-service/infrastructure/), breaking every ./secrets/... path.
+tasks.named<JavaExec>("run") {
+    workingDir = rootProject.projectDir
 }

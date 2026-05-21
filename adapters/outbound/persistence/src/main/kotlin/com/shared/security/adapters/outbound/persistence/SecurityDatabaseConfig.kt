@@ -16,11 +16,14 @@ package com.shared.security.adapters.outbound.persistence
  * | `SECURITY_DB_USER` | `security` | |
  * | `SECURITY_DB_PASSWORD` | (none) | Required when [enabled]. Fail-closed on missing. |
  * | `SECURITY_DB_POOL_SIZE` | `5` | HikariCP `maximumPoolSize`. |
- * | `SECURITY_DB_ENABLED` | `false` | `true` opts in to DB-backed adapters; `false` keeps the Stream-B SLF4J fallback bindings live. |
+ * | `SECURITY_DB_ENABLED` | `true` | `false` is an explicit dev-only opt-out that wires the SLF4J fallback adapter (no tamper-evident audit chain). |
  *
- * Stream B keeps `SECURITY_DB_ENABLED=false` as the default so the service runs without a
- * MySQL dependency for `./gradlew :infrastructure:run`. Stream E flips this to `true` in the
- * docker-compose env file once the `security-mysql` service is wired.
+ * **Default flipped to `true` in SKS-E08** (2026-05-15). The Stream-B-era default of
+ * `false` was a safety to let the service boot without MySQL during early development,
+ * but it silently downgraded audit posture once the DB was available — operators were
+ * getting `Slf4jAuditLogAdapter` (in-memory log fallback) when they expected the real
+ * HMAC-chained adapter. The default now matches operational expectations; pass
+ * `SECURITY_DB_ENABLED=false` explicitly for tests or for boot-without-MySQL smoke checks.
  */
 data class SecurityDatabaseConfig(
     val jdbcUrl: String,
@@ -52,7 +55,7 @@ data class SecurityDatabaseConfig(
          * must keep the Stream-B SLF4J fallback bindings live (the audit log writes to slf4j
          * INFO and no `keks` / `deks` table state is touched).
          */
-        fun isEnabled(env: (String) -> String? = System::getenv): Boolean = parseBoolean(env(ENV_ENABLED), false)
+        fun isEnabled(env: (String) -> String? = System::getenv): Boolean = parseBoolean(env(ENV_ENABLED), true)
 
         /**
          * Load config from the process environment. Throws [SecurityDatabaseConfigException]

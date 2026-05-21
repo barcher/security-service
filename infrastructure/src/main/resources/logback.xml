@@ -13,4 +13,13 @@
   <logger name="Exposed" level="WARN"/>
   <logger name="com.zaxxer.hikari" level="INFO"/>
   <logger name="org.flywaydb" level="INFO"/>
+
+  <!--
+    Netty's ApplicationProtocolNegotiationHandler logs every failed TLS handshake at WARN
+    with the full stack trace. For an mTLS-required server, every anonymous client probe
+    triggers this and floods the log. SslHandshakeExceptionHandler already emits a single
+    INFO line for the same event with the relevant context (remote address + reason), so
+    suppressing this class to ERROR loses no information.
+  -->
+  <logger name="io.netty.handler.ssl.ApplicationProtocolNegotiationHandler" level="ERROR"/>
 </configuration>

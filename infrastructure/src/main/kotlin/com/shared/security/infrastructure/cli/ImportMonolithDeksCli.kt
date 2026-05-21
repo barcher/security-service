@@ -67,7 +67,7 @@ class ImportMonolithDeksCli {
 
         val crypto =
             checkNotNull(MlKemCryptoKeyService.fromEnv()) {
-                "ML_KEM_PUBLIC_KEY / ML_KEM_PRIVATE_KEY env vars not set; mount the KEK material first"
+                "Neither ML_KEM_*_CURRENT nor ML_KEM_*_LEGACY_V0 env-var pairs are set; mount KEK material first"
             }
         // Avoid an "unused" warning during dev — also verifies the KEK provider env path works.
         FileMountKekProvider.fromEnv()

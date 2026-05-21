@@ -22,6 +22,11 @@ allprojects {
     version = "1.0.0"
 }
 
+// SKS-H11: `.env` loading was previously done here at the Gradle layer as a temporary
+// workaround. The application now loads `.env` directly at the top of `Application.main()`
+// via `io.github.cdimascio:dotenv-kotlin`, so the same env vars are visible regardless of
+// launch path (gradle run, java -jar, IDE, prod container). No Gradle-side .env coupling.
+
 subprojects {
     apply(plugin = "org.jlleitschuh.gradle.ktlint")
     apply(plugin = "io.gitlab.arturbosch.detekt")

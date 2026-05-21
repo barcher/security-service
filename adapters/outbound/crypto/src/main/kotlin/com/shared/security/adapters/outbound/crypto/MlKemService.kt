@@ -83,6 +83,36 @@ class MlKemService(
         }
     }
 
+    /**
+     * TEMPORARY (legacy-rewrap-cleanup, LRW-01): delete this method, [aesGcmDecryptNoAad],
+     * the [WRAP_ALGORITHM_LEGACY_V0] constant, and [Companion.fromLegacyEnv] once all
+     * `encryption_keys` rows are rewrapped under the current KEK. Tracked in
+     * `meta-project/work-items/phases/phase14/items.md` § "Legacy-DEK rewrap follow-up".
+     *
+     * Decapsulate + AES-GCM unwrap using the legacy Phase-12 wrap format. No HKDF expansion,
+     * no AEAD AAD — the raw 32-byte shared secret is used directly as the AES-256 key. Only
+     * exists to read DEK rows that were wrapped by the monolith's pre-cutover in-process
+     * `MlKemService` (i.e. rows whose `algorithm` column equals [WRAP_ALGORITHM_LEGACY_V0]).
+     *
+     * **Never call this for new wraps.** It is intentionally unidirectional — there is no
+     * legacy WRAP companion. Operationally, the security service uses this to unwrap legacy
+     * DEKs on first read and surfaces the plaintext upward; the caller is expected to re-wrap
+     * the DEK under the current KEK and update the row's algorithm to the current value.
+     */
+    fun decapsulateAndUnwrapDekLegacy(
+        kemCiphertextB64: String,
+        encryptedDekB64: String,
+    ): ByteArray {
+        val kemCiphertext = Base64.getDecoder().decode(kemCiphertextB64)
+        val encryptedDek = Base64.getDecoder().decode(encryptedDekB64)
+        val sharedSecret = MLKEMExtractor(privateKey).extractSecret(kemCiphertext)
+        return try {
+            aesGcmDecryptNoAad(encryptedDek, sharedSecret)
+        } finally {
+            sharedSecret.fill(0)
+        }
+    }
+
     /** SHA-256 fingerprint of the public key in colon-hex notation. Safe to display. */
     fun getPublicKeyFingerprint(): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(publicKeyBytes)
@@ -98,6 +128,23 @@ class MlKemService(
 
         /** Expected private key size in bytes for ML-KEM-768. */
         const val PRIVATE_KEY_BYTES = 2400
+
+        /**
+         * Algorithm string carried in [com.shared.security.application.ports.WrappedDek.algorithm]
+         * for DEK rows produced by the current wrap pipeline (this class's
+         * [generateAndWrapDek] / [wrapDek]). Identifies the HKDF-SHA-512 + AAD layer.
+         */
+        const val WRAP_ALGORITHM_CURRENT = "ML-KEM-768/AES-256-GCM"
+
+        /**
+         * TEMPORARY (legacy-rewrap-cleanup, LRW-01): collapse [WRAP_ALGORITHM_CURRENT] and
+         * this constant into a single algorithm string once all rows are rewrapped.
+         *
+         * Algorithm string for DEK rows produced by the Phase-12 in-process wrap path in the
+         * monolith — raw shared secret as AES key, no HKDF, no AAD. These rows are
+         * unwrap-only via [decapsulateAndUnwrapDekLegacy]; new wraps never use this format.
+         */
+        const val WRAP_ALGORITHM_LEGACY_V0 = "ML-KEM-768/AES-256-GCM-LEGACY-V0"
 
         /** Domain-separation prefix for the AEAD AAD. Versioned for forward-compatibility. */
         internal val WRAP_AAD_PREFIX: ByteArray = "WA.Security.MlKemWrap.v1".toByteArray(Charsets.US_ASCII)
@@ -134,17 +181,49 @@ class MlKemService(
             return Base64.getEncoder().encodeToString(pub) to Base64.getEncoder().encodeToString(priv)
         }
 
-        /** Construct from env vars `ML_KEM_PUBLIC_KEY` / `ML_KEM_PRIVATE_KEY`. Returns null if unset. */
-        fun fromEnv(): MlKemService? {
-            val pub = System.getenv("ML_KEM_PUBLIC_KEY") ?: return null
-            val priv = System.getenv("ML_KEM_PRIVATE_KEY") ?: return null
+        /**
+         * Construct the **current-KEK** ML-KEM service from
+         * `ML_KEM_PUBLIC_KEY_CURRENT` / `ML_KEM_PRIVATE_KEY_CURRENT`. Returns null if unset.
+         * The current KEK is the one used for all new wraps and rotations.
+         */
+        fun fromCurrentEnv(): MlKemService? =
+            fromEnvPair(
+                publicEnvName = "ML_KEM_PUBLIC_KEY_CURRENT",
+                privateEnvName = "ML_KEM_PRIVATE_KEY_CURRENT",
+            )
+
+        /**
+         * TEMPORARY (legacy-rewrap-cleanup, LRW-01): delete this factory once all DEK rows
+         * are rewrapped under the current KEK.
+         *
+         * Construct the **legacy-KEK** ML-KEM service from
+         * `ML_KEM_PUBLIC_KEY_LEGACY_V0` / `ML_KEM_PRIVATE_KEY_LEGACY_V0`. Returns null if
+         * unset. This service must only be invoked by
+         * [decapsulateAndUnwrapDekLegacy] — see [MlKemCryptoKeyService.unwrapDek].
+         */
+        fun fromLegacyEnv(): MlKemService? =
+            fromEnvPair(
+                publicEnvName = "ML_KEM_PUBLIC_KEY_LEGACY_V0",
+                privateEnvName = "ML_KEM_PRIVATE_KEY_LEGACY_V0",
+            )
+
+        private fun fromEnvPair(
+            publicEnvName: String,
+            privateEnvName: String,
+        ): MlKemService? {
+            // Treat blank/empty as unset — the .env file may carry the var name as a
+            // placeholder (e.g. `ML_KEM_PUBLIC_KEY_CURRENT=`) which System.getenv returns
+            // as "" rather than null. Without this guard, Base64-decoding "" throws and
+            // the whole CryptoKeyServicePort binding fails at startup.
+            val pub = System.getenv(publicEnvName)?.takeIf { it.isNotBlank() } ?: return null
+            val priv = System.getenv(privateEnvName)?.takeIf { it.isNotBlank() } ?: return null
             return runCatching {
                 MlKemService(
                     Base64.getDecoder().decode(pub),
                     Base64.getDecoder().decode(priv),
                 )
             }.getOrElse {
-                error("ML_KEM_PUBLIC_KEY or ML_KEM_PRIVATE_KEY is not valid Base64: ${it.message}")
+                error("$publicEnvName or $privateEnvName is not valid Base64: ${it.message}")
             }
         }
 
@@ -223,6 +302,18 @@ class MlKemService(
             val cipher = Cipher.getInstance(AES_TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, AES_ALGORITHM), GCMParameterSpec(GCM_TAG_BITS, iv))
             cipher.updateAAD(aad)
+            return cipher.doFinal(ciphertext)
+        }
+
+        /** Legacy AES-GCM decrypt: no AAD, key is the raw shared secret. Unwrap-only. */
+        private fun aesGcmDecryptNoAad(
+            ivAndCiphertext: ByteArray,
+            key: ByteArray,
+        ): ByteArray {
+            val iv = ivAndCiphertext.copyOfRange(0, GCM_IV_LENGTH)
+            val ciphertext = ivAndCiphertext.copyOfRange(GCM_IV_LENGTH, ivAndCiphertext.size)
+            val cipher = Cipher.getInstance(AES_TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, AES_ALGORITHM), GCMParameterSpec(GCM_TAG_BITS, iv))
             return cipher.doFinal(ciphertext)
         }
     }

@@ -19,10 +19,10 @@ This file is kept current per ticket: each stream's tickets either toggle a stat
 
 | Dimension | Score | Status as of Stream D |
 |-----------|-------|------------------------|
-| **Key isolation** | A | KEK held in memory only; mounted via `FileMountKekProvider`; never on disk in plaintext; **Stream D**: monolith never imports `MlKemService` directly in prod-wired paths — only `RemoteCryptoKeyServiceAdapter` reaches the KEK. |
+| **Key isolation** | A | KEK held in memory only; mounted via `FileMountKekProvider`; never on disk in plaintext; **Stream D**: monolith never imports `MlKemService` directly in prod-wired paths — only `RemoteCryptoKeyServiceAdapter` reaches the KEK. **Stream E follow-up (TRUST_MODEL.md)**: architecture pre-wired for HSM-rooted prod via the `KekProvider` interface seam; prod replaces `FileMountKekProvider` with `HsmUnwrappingKekProvider` calling PKCS#11 without touching any application-layer use case. Root CA private key never exists as bytes outside the physical HSM in prod. |
 | **Algorithm modernity** | A | ML-KEM-768 (FIPS 203) + HKDF-SHA-512 + AES-256-GCM. TLS 1.3 + ECDSA P-384 on both server (security-service) and client (monolith `RemoteCryptoKeyServiceAdapter`). No legacy fallback. |
-| **Audit integrity** | A | HMAC-SHA-512 row chain keyed by independent `AUDIT_HMAC_KEY`. Chain-break is structural tamper evidence. |
-| **Authentication** | A− | mTLS on every endpoint, including `/v1/health`. **Stream D**: monolith-side client is wired via `RemoteCryptoKeyServiceAdapter` — TLS 1.3 only, ECDSA P-384, exponential-backoff retry, fail-closed on connection error. **Caveat:** real cert-chain *extractor* on the server still lands in Stream E (deny-all default in `SecurityServiceModule`). |
+| **Audit integrity** | A | HMAC-SHA-512 row chain keyed by independent `AUDIT_HMAC_KEY`. Chain-break is structural tamper evidence. **SKS-E08 (2026-05-15):** `SECURITY_DB_ENABLED` default flipped from `false` to `true` — the in-memory SLF4J fallback is now an explicit opt-out, not a silent default; operators no longer get a tamper-evidence-free audit log when they forget to set the env var. |
+| **Authentication** | A | mTLS on every endpoint, including `/v1/health`. **Stream D**: monolith-side client is wired via `RemoteCryptoKeyServiceAdapter` — TLS 1.3 only, ECDSA P-384, exponential-backoff retry, fail-closed on connection error. **SKS-E07 (2026-05-15)**: the Stream-E intent is fully realized — `Application.kt::buildServer` installs a Ktor `sslConnector` with the configured keystore + truststore (mTLS-required at the Netty handshake layer), and `NettySslPeerCertChainExtractor` reads the validated chain from the Netty `SslHandler` SSL session for `MtlsAuthPlugin` to consume. The `DenyAllPeerCertChainExtractor` remains as the fail-closed fallback when `MtlsConfig.fromEnv()` returns null. |
 | **Authorization** | A | Admin endpoints gated on `AdminAllowList` subject DN; ADMIN_FORBIDDEN audit on every reject. |
 | **Rate limiting** | B+ | Per-subject token bucket on `/v1/dek/unwrap`. **Caveat:** local-process state — multi-replica scale-out requires a shared limiter (Stream F follow-on). |
 | **Audit retention** | A | 7-year retention floor (FedRAMP AU-11). Cold-storage gate prevents deletion before mirror confirmation. |
@@ -124,12 +124,41 @@ Reference: [`AUDIT_LOG.md`](AUDIT_LOG.md), [`KEK_LIFECYCLE.md`](KEK_LIFECYCLE.md
 
 | Control | Implementation | Reference |
 |---------|----------------|-----------|
-| Schema linter for paired sibling columns | `EncryptedColumnSchemaLinterTest` — `@Disabled` until SKS-G09 lands; then forward-only guard | `scaffold/adapters/outbound/persistence/src/test/.../EncryptedColumnSchemaLinterTest.kt` |
+| Schema linter for paired sibling columns | `EncryptedColumnSchemaLinterTest` — enabled as of SKS-G09; forward-only guard fails build on any new encrypted column without paired siblings | `scaffold/adapters/outbound/persistence/src/test/.../EncryptedColumnSchemaLinterTest.kt` |
 | `EncryptedColumnWriter` facade — 3-step reader rule | Sibling → prefix → plaintext (fail-closed on registered-encrypted with neither) | `scaffold/application/.../ports/EncryptedColumnWriter.kt` + `scaffold/infrastructure/.../security/DekWrappedEncryptedColumnWriter.kt` |
-| Producer always emits envelope-format sibling | Writer returns `EncryptedTriplet(ciphertext, "v0", null)` for encrypted columns | same |
-| Canonical sibling-column migration template | `V112__sks_g02_dining_sessions_sibling_columns.sql` — paired `<col>_envelope_format` + `<col>_dek_handle` per encrypted column, backfilled from value-prefix | `scaffold/infrastructure/src/main/resources/db/migration/V112__*.sql` |
+| Producer always emits envelope-format sibling | Writer returns `EncryptedTriplet(ciphertext, "v0" \| "v4", dek_handle?)` for encrypted columns | same |
+| Canonical sibling-column migrations | V112 (dining_sessions), V113 (RTVA + briefs + AI prompts + audit + investor + team-roles + calendar + hiring suite), V114 (inbox / resume / travel / framing) | `scaffold/infrastructure/src/main/resources/db/migration/V112-V114__*.sql` |
 
 **FedRAMP mapping:** SC-28 (info at rest — adding format/handle siblings prepares for opaque ciphertext without sacrificing readability during transition), CM-3 (configuration change control — every new encrypted column requires a paired-column migration; enforced post-G09).
+
+### Stream H (P14.2) — Prefix-less writes + envelope migration
+
+| Control | Implementation | Reference |
+|---------|----------------|-----------|
+| Wire-version selector (env-gated) | `EncryptorWireVersion` enum + `ENCRYPTOR_WIRE_VERSION` env var; default `v3`, opt-in `v4` | `scaffold/application/.../ports/EncryptorWireVersion.kt` |
+| Prefix-less v4 write path | `DekWrappedEncryptedColumnWriter.writeV4` — base64(iv ‖ ct ‖ tag), no `enc:` prefix; mints DEK handle via `DekHandleResolver` port | `scaffold/infrastructure/.../security/DekWrappedEncryptedColumnWriter.kt` |
+| v4 reader | `readOpaqueV4` — uses `<col>_dek_handle` to fetch DEK via wired `v4DekFetcher`; null-handle fails closed | same |
+| Reader rule — legacy tolerance | `readFrom` falls through to legacy `enc:v0:` / `enc:v3:` parser when `envelope_format != 'v4'` | same |
+| Invariant guard — H04 | `DekWrappedEncryptedColumnWriterV4Test.H04 invariant` asserts v4 ciphertext never starts with `enc:` (covers plaintext that itself contains `enc:` substring) | `scaffold/infrastructure/src/test/.../DekWrappedEncryptedColumnWriterV4Test.kt` |
+| `EnvelopeMigrationToV4Port` — per-column rewriter port | Distinct from Stream-E `LegacyEnvelopeRewriterPort`; targets v0/v2/v3 → v4 | `scaffold/application/.../ports/EnvelopeMigrationToV4Port.kt` |
+| `RunEnvelopeMigrationToV4UseCase` — driver | Bounded batch (default `perColumnBatch=500`, `totalBatchCeiling=5000`/fire); state namespaced `v4:<table>` in `legacy_envelope_rewrite_state`; error isolation per column | `scaffold/application/.../principal/RunEnvelopeMigrationToV4UseCase.kt` |
+| `EnvelopeMigrationJob` — Quartz | `@DisallowConcurrentExecution`; structured logging; idempotent per row | `scaffold/adapters/inbound/scheduler/.../EnvelopeMigrationJob.kt` |
+
+**FedRAMP mapping:** SC-13 (cryptographic protection — the v4 envelope keeps AES-256-GCM but eliminates the in-band format prefix, which was metadata leakage), CM-3 (configuration change control — wire-version toggle is reversible until cutover; rollback path documented), SI-7 (software integrity — H04 invariant guard fails the build on any regression that re-introduces an in-band prefix on the v4 path).
+
+**Stream H02b (per-column rewriter SQL adapters):** generic `GenericEnvelopeRewriterToV4` + `EnvelopeMigrationRowAccessPort` + `ExposedEnvelopeMigrationRowAccessAdapter` (defence-in-depth identifier validation via `[a-z][a-z0-9_]{0,63}` regex) + auto-discovery `EnvelopeRewriterRegistry` that materialises one rewriter per row in `principal_column_encryption_config`. State persisted via `ExposedLegacyEnvelopeRewriteStateRepository`. Quartz job wired in `Application.configureScheduler` to fire every 10 minutes. 10 use-case + 4 registry unit tests pass.
+
+### Stream I (P14.3) — Reader-deletion cutover (partial — operator-gated)
+
+| Control | Implementation | Reference |
+|---------|----------------|-----------|
+| Migration-completion gate use case | `CheckEnvelopeMigrationStatusUseCase` — sums `COUNT(*) WHERE envelope_format IS NULL OR != 'v4'` across every registered encrypted column | `scaffold/application/.../principal/CheckEnvelopeMigrationStatusUseCase.kt` |
+| Migration-completion gate route | `GET /api/security/envelope-migration-status` — ACCOUNT_OWNER only; returns `{complete, totalRemaining, columns[]}`; read-only + idempotent | `scaffold/adapters/inbound/http/.../PrincipalEnvelopeMigrationRoutes.kt` |
+| ArchUnit M-9 (transitional) | `CryptoModuleOutwardBoundaryTest` forbids `"enc:v"` literal in `infrastructure/security/` outside `STREAM_I_LEGACY_EXEMPTIONS`; exemption list currently covers `DekWrappedStringEncryptor.kt` + `DekWrappedEncryptedColumnWriter.kt` and is removed at SKS-I02 cutover | `scaffold/infrastructure/src/test/.../CryptoModuleOutwardBoundaryTest.kt` |
+
+**FedRAMP mapping:** AU-2 (auditable events — gate endpoint is the operator's checkable verification step before reader deletion), CM-3 (configuration change control — the gate's `complete=true` return is the formal sign-off before SKS-I02 lands), SI-7 (software integrity — M-9 guards against accidental re-introduction of the in-band wire-format prefix).
+
+**Operator-gated (deferred):** SKS-I02 (legacy prefix-branch deletion in `DekWrappedEncryptedColumnWriter.readFrom`) and SKS-I04 (test fixture cleanup) land in a single follow-up PR once the operator confirms `GET /api/security/envelope-migration-status` returns `complete=true` in production. This gate is enforced operationally, not in code, because the migration job itself depends on the legacy reader to bridge `enc:v0:` rows to v4 — landing SKS-I02 before migration completion would prevent any further v4 conversions.
 
 ### Rate limiting
 
