@@ -19,6 +19,7 @@ allowlist fails CI.
 | `DEPLOYMENT.md` | ✅ written | Stream E | docker-compose stack, k3s topology (§3.3, §3.4), secrets layout. |
 | `CERT_GENERATION.md` | ✅ written | Stream E | OpenSSL recipes for the PKCS12 server + client keystores (ECDSA P-384). |
 | `TRUST_MODEL.md` | ✅ written | Stream E follow-up | Self-contained architecture doc: three trust authorities (workload mTLS, ingress, KEK), why security-service IS the dev CA, prod replacement via Linkerd + HSM-backed offline trust anchor. |
+| `HSM_KEY_CEREMONY.md` | ✅ written | Stream K (2026-05-22) | Operator runbook for KEK + JWT signing-key initial setup, scheduled rotation, emergency replacement, and disposal. HSM-anchored (YubiHSM 2 default); cloud-KMS alternative path documented but non-default. |
 
 Anything outside this list belongs in the top-level [`README.md`](../README.md), in
 [`.env.example`](../.env.example), or in the source itself as a KDoc block. No

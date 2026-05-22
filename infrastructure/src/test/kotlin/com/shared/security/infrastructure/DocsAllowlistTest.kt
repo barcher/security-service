@@ -102,6 +102,7 @@ class DocsAllowlistTest {
                 "DEPLOYMENT.md",
                 "CERT_GENERATION.md",
                 "TRUST_MODEL.md",
+                "HSM_KEY_CEREMONY.md",
             )
     }
 }
