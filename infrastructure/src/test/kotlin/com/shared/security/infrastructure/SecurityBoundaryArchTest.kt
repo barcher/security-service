@@ -12,9 +12,14 @@ import org.junit.jupiter.api.Test
  * `adapters/outbound/crypto/.../CryptoBoundaryArchTest` because they need to scan only
  * the crypto module's classes.
  *
- * S-7 (docs allowlist) and S-9 (cross-repo port byte-identity) are asserted as plain
- * JUnit tests in [DocsAllowlistTest] and [CryptoKeyServicePortIdentityTest] because they
- * inspect filesystem contents rather than class metadata.
+ * S-7 (docs allowlist) is asserted as a plain JUnit test in [DocsAllowlistTest] because
+ * it inspects filesystem contents rather than class metadata.
+ *
+ * S-9 (cross-repo port byte-identity) is **retired** as of the Phase-2 collapse of the
+ * shared-security-client adoption: the canonical base port now lives in the shared client
+ * library at `workAutomations/shared-security-client/` and is consumed by every service.
+ * There is no longer a second copy in the monolith to keep in sync. The base wire DTOs
+ * (`WrappedDek`, etc.) are owned by the shared module and evolve additively per its rules.
  */
 class SecurityBoundaryArchTest {
     private val classes =
