@@ -15,10 +15,12 @@ dependencies {
     implementation(libs.bcprov.jdk18on)
     implementation(libs.kotlin.stdlib)
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.logback.classic)
 
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.archunit.junit5)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.kotlinx.datetime)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

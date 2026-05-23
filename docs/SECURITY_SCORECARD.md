@@ -8,12 +8,13 @@ This file is kept current per ticket: each stream's tickets either toggle a stat
 **Planned** / **Partial** to **Implemented**, or add a new row. ArchUnit rule **S-7**
 (Stream F) blocks the addition of any new doc that isn't in `docs/README.md`'s allowlist.
 
-> Re-graded at each stream's close. **Last update:** Stream G kickoff — `EncryptedColumnWriter`
-> facade introduced (P14.1 sibling-column threading). Reader implements the three-step
-> rule (proposal §7.1.1). Canonical V112 sibling-column migration template landed for
-> `principal_dining_sessions`; SKS-G03..G09 follow the template per-table. SKS-G01
-> schema linter present but `@Disabled` until SKS-G09 lands — code review owns the
-> "new encrypted column needs siblings" check until then.
+> Re-graded at each stream's close. **Last update: 2026-05-22 — Stream K K.0 foundations + shared-security-client Phase 1+2 cross-cutting.**
+>
+> Catch-up summary since Stream G kickoff:
+> - Streams G–H + SKS-G12 (22 repos wired through `EncryptedColumnWriter`) shipped.
+> - SKS-H08/H09/H10/H11 + H06/H07 (frontend stale-state) shipped.
+> - **shared-security-client Phase 1+2 (2026-05-22):** canonical client library extracted to `workAutomations/shared-security-client/`; monolith + financial-service consumers refactored; S-9 ArchUnit byte-identity rule retired (one canonical port, not two).
+> - **Stream K K.0 foundations (2026-05-22):** v0.2 proposal approved; `jwt_signing_keys` Flyway V5 migration; `JwtSigningKeyRepository` + `JwtAudienceAllowList` ports; `KekEnvelopePort` (internal-port pattern) + `KekEnvelopeAdapter` (AAD-binding bridge); `Es256SigningService` in new `adapters/outbound/jwt-signing/` submodule; JWT event types added to `AuditEventType`; `HSM_KEY_CEREMONY.md` runbook for KEK + JWT signing keys.
 
 ## Posture summary
 
@@ -198,6 +199,39 @@ N=1 in Stream C deployments.
 | Health probing | `KekRotationHealthJob` — probe wrap + unwrap hourly | `RunKekHealthCheckUseCase.kt` |
 | Backup verification | `KekBackupVerifyJob` — daily probe decrypt against offsite store | `RunKekBackupVerifyUseCase.kt` |
 | Backup independence | `BACKUP_KEY` separate from KEK; backup verifier port abstracted | `application/ports/KekBackupVerifierPort.kt` |
+| **HSM ceremony procedure (v0.2)** | Two-person observed ceremony for initial setup, rotation, emergency replacement, disposal; YubiHSM 2 default with cloud-KMS alternative documented | [`HSM_KEY_CEREMONY.md`](HSM_KEY_CEREMONY.md) |
+
+### JWT signing-key lifecycle (Stream K — K.0 in progress)
+
+The JWT signing path mirrors the KEK lifecycle (same state machine, same audit-event
+discipline, same backup expectations) with one structural addition: a narrow internal
+port (`KekEnvelopePort`) isolates the JWT use cases from the wider `CryptoKeyServicePort`.
+
+| Control | Implementation | Reference |
+|---------|----------------|-----------|
+| Singleton-ACTIVE invariant | Schema-enforced via generated column + unique index | `V5__jwt_signing_keys.sql` |
+| Lifecycle state machine | STAGED → ACTIVE → PRIOR → QUIESCED → RETIRED | `JwtSigningKeyStatus.kt` (planned: `JWT_KEY_LIFECYCLE.md` per SKS-K13) |
+| Wrapped-at-rest | Private bytes are KEK-wrapped via `KekEnvelopePort` with AAD-binding (`jwt-signing-key:<kid>`). Plaintext never touches disk outside the HSM | `KekEnvelopeAdapter.kt` |
+| Cross-module isolation | JWT use cases consume `KekEnvelopePort`, NEVER `CryptoKeyServicePort` directly. `KekEnvelopeAdapter` is the exclusive bridge (planned ArchUnit S-12 + S-13 land with SKS-K01a) | `application/ports/KekEnvelopePort.kt` |
+| Signing primitive isolation | `Es256SigningService` lives in dedicated `adapters/outbound/jwt-signing/` submodule; never collocated with KEK/DEK crypto module | `Es256SigningService.kt` |
+| HSM ceremony procedure | Same two-person ceremony pattern as KEK; differences (algorithm, wrapping, publication) called out explicitly | [`HSM_KEY_CEREMONY.md`](HSM_KEY_CEREMONY.md) §3 |
+| Caller authentication (two-gate) | Gate 1: mTLS subject DN (existing `MtlsAuthPlugin`). Gate 2: `JwtAudienceAllowList.isAllowed(subjectDn, audience)` — denies cross-audience minting even with valid mTLS | `application/ports/JwtAudienceAllowList.kt` |
+| Four-lane subject-DN separation | Operational / admin / dashboard-observer / operator-decrypt cert lanes recorded as distinct `actor_subject` prefixes for audit filtering | Proposal §3.4a |
+
+### Cross-cutting — shared-security-client library (2026-05-22)
+
+Phase 1+2 of the `shared_security_client.md` proposal extracted the canonical base
+client out of `scaffold/` (monolith) and `financial-service/` (sibling) into
+`workAutomations/shared-security-client/`. Stream K K.1+ JWT client adapters extend
+the same library with a `jwt/` sub-package.
+
+| Control | Implementation | Reference |
+|---------|----------------|-----------|
+| Single source of truth for wire DTOs | `WrappedDek`, `KekPair`, JSON wire schema live in `shared-security-client/`; consumers depend via Gradle composite build | `shared-security-client/src/main/resources/wire-schema/security-client-v1.json` |
+| Consumer independence (ArchUnit) | `ConsumerIndependenceArchTest` fails build if the shared module imports any consumer-side package, Koin, Ktor server, Exposed, or BouncyCastle | `shared-security-client/src/test/.../ConsumerIndependenceArchTest.kt` |
+| Per-consumer mTLS subject DN | Each consuming service mints its own client cert (`CN=workautomations-<service>,...`); security-service's allow-list distinguishes callers in audit log | (this scorecard; see Authentication row) |
+| Service-specific extension model | Financial-service's vault password-wrap superset stays in `financial-service/`; the shared client provides only the base ops every consumer needs (memory rule `feedback_financial_vault_superset.md`) | Proposal §3 v0.2 |
+| Retired byte-identity check | S-9 ArchUnit rule deleted post-Phase-2 — there is no longer a second port to keep in sync | (removed 2026-05-22) |
 
 ### Failure modes audited
 
@@ -213,10 +247,18 @@ Every failure that leaves a visible state change emits an audit row. The catalog
 | Audit chain break detected | `AUDIT_CHAIN_BREAK` | false |
 | Cold-storage shipper permanent failure | `AUDIT_SHIPPED` | false |
 | Backup verifier reports corrupt backup | `KEK_BACKUP_VERIFY_FAILED` | false |
+| JWT sign request rejected by audience allow-list (Stream K) | `JWT_AUDIENCE_FORBIDDEN` | false |
+| JWT sign failed (key unavailable, sign exception) (Stream K) | `JWT_SIGN_FAILED` | false |
+| JWT signing-key health-probe failed (Stream K) | `JWKS_HEALTH_CHECK_FAILED` | false |
 
 All of the above are queryable via the persistent audit log (Stream C onward) and feed
 the cold-storage shipper. Transient failures (network blips on cold-storage ship, network
 blips on backup verify) intentionally do NOT audit, so retries don't flood the chain.
+
+Stream K adds successful-event types as well: `JWKS_KEY_GENERATED`, `JWKS_KEY_ACTIVATED`,
+`JWKS_KEY_QUIESCED`, `JWKS_KEY_RETIRED`, `JWKS_KEY_DELETED`, `JWT_SIGNED`. The
+`JWT_SIGNED` rows feed the K.3 operator gate (Grafana panel
+`jwt_verify_algorithm_total{algorithm="HS256"}` must be flat at 0 for ≥ 24 h).
 
 ## FedRAMP control crosswalk
 
@@ -231,13 +273,14 @@ blips on backup verify) intentionally do NOT audit, so retries don't flood the c
 | IA-2 (identification + authentication) | ✅ | Subject DN from mTLS leaf cert |
 | SC-7 (boundary protection) | ⚠️ | Stream E wires Linkerd / docker-secrets boundary; current state assumes secure pod-to-pod within k8s namespace |
 | SC-8 (transmission confidentiality) | ✅ | TLS 1.3 mandatory on every endpoint |
-| SC-12 (cryptographic key establishment) | ✅ | ML-KEM-768 KEM + HKDF-SHA-512 KDF |
-| SC-13 (cryptographic protection) | ✅ | AES-256-GCM AEAD with AAD-bound wrap |
-| SC-28 (protection of information at rest) | ✅ | DEKs wrapped under KEK; KEK at rest in mounted secret store |
+| SC-12 (cryptographic key establishment) | ✅ | ML-KEM-768 KEM + HKDF-SHA-512 KDF (KEK); ES256 P-256 (JWT signing — Stream K K.0 prep). Both classes covered by `HSM_KEY_CEREMONY.md` operator runbook. |
+| SC-13 (cryptographic protection) | ✅ | AES-256-GCM AEAD with AAD-bound wrap; AAD now extends to JWT signing-key envelopes via `KekEnvelopePort.wrap(plaintext, aad)` (Stream K K.0) |
+| SC-28 (protection of information at rest) | ✅ | DEKs wrapped under KEK; KEK at rest in mounted secret store (HSM in prod per `TRUST_MODEL.md` + `HSM_KEY_CEREMONY.md`); JWT signing-key private bytes wrapped under KEK in `jwt_signing_keys.wrapped_private_key_bytes` |
+| IA-5 (authenticator management) | ⚠️ | JWT signing key lifecycle pre-built (Stream K K.0 in progress); IA-5 will flip to ✅ when K.3 ships and HS256 is deleted |
 | SI-7 (software integrity) | ⚠️ | Stream F adds reproducible-build attestation + signed releases |
 
-✅ = covered as of Stream C. ⚠️ = covered structurally, partial implementation; lands in
-Stream E or F per ticket roadmap.
+✅ = covered as of Stream C+G+H+K-foundations. ⚠️ = covered structurally, partial implementation; lands in
+Stream E, F, or K.3 per ticket roadmap.
 
 ## How to use this scorecard
 

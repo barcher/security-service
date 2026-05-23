@@ -113,4 +113,17 @@ object AuditEventType {
     // KEK backup verification (Stream C — emitted by KekBackupVerifyJob)
     const val KEK_BACKUP_VERIFIED = "KEK_BACKUP_VERIFIED"
     const val KEK_BACKUP_VERIFY_FAILED = "KEK_BACKUP_VERIFY_FAILED"
+
+    // JWT signing-key lifecycle (Stream K — proposal §9)
+    const val JWKS_KEY_GENERATED = "JWKS_KEY_GENERATED"
+    const val JWKS_KEY_ACTIVATED = "JWKS_KEY_ACTIVATED"
+    const val JWKS_KEY_QUIESCED = "JWKS_KEY_QUIESCED"
+    const val JWKS_KEY_RETIRED = "JWKS_KEY_RETIRED"
+    const val JWKS_KEY_DELETED = "JWKS_KEY_DELETED"
+    const val JWKS_HEALTH_CHECK_FAILED = "JWKS_HEALTH_CHECK_FAILED"
+
+    // JWT signing operations (Stream K)
+    const val JWT_SIGNED = "JWT_SIGNED"
+    const val JWT_AUDIENCE_FORBIDDEN = "JWT_AUDIENCE_FORBIDDEN"
+    const val JWT_SIGN_FAILED = "JWT_SIGN_FAILED"
 }
