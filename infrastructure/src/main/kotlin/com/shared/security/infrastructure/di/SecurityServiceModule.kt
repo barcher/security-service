@@ -4,8 +4,12 @@ import com.shared.security.adapters.inbound.http.auth.DenyAllPeerCertChainExtrac
 import com.shared.security.adapters.inbound.http.auth.NettySslPeerCertChainExtractor
 import com.shared.security.adapters.inbound.http.auth.PeerCertChainExtractor
 import com.shared.security.adapters.inbound.http.ratelimit.PerSubjectRateLimiter
+import com.shared.security.adapters.outbound.crypto.KekEnvelopeAdapter
 import com.shared.security.adapters.outbound.crypto.MlKemCryptoKeyService
 import com.shared.security.adapters.outbound.crypto.NoOpCryptoKeyService
+import com.shared.security.adapters.outbound.jwtsigning.Es256JwtSigningKeyAdapter
+import com.shared.security.adapters.outbound.persistence.ExposedJwtSigningKeyRepository
+import com.shared.security.adapters.outbound.persistence.ExposedKekRepository
 import com.shared.security.adapters.outbound.persistence.SecurityDatabase
 import com.shared.security.adapters.outbound.persistence.SecurityDatabaseConfig
 import com.shared.security.adapters.outbound.persistence.SecurityFlywayMigrator
@@ -15,6 +19,10 @@ import com.shared.security.adapters.outbound.persistence.audit.ExposedAuditLogRe
 import com.shared.security.application.ports.AdminAllowList
 import com.shared.security.application.ports.AuditLogPort
 import com.shared.security.application.ports.CryptoKeyServicePort
+import com.shared.security.application.ports.JwtAudienceAllowList
+import com.shared.security.application.ports.JwtSigningKeyRepository
+import com.shared.security.application.ports.KekEnvelopePort
+import com.shared.security.application.ports.KekRepository
 import com.shared.security.application.ports.StaticAdminAllowList
 import com.shared.security.application.usecases.GenerateDekUseCase
 import com.shared.security.application.usecases.GenerateNewKekPairUseCase
@@ -22,12 +30,21 @@ import com.shared.security.application.usecases.GetKeyStatusUseCase
 import com.shared.security.application.usecases.RewrapDekUseCase
 import com.shared.security.application.usecases.UnwrapDekUseCase
 import com.shared.security.application.usecases.WrapDekUseCase
+import com.shared.security.application.usecases.jwt.ActivateJwtSigningKeyUseCase
+import com.shared.security.application.usecases.jwt.GenerateJwtSigningKeyPairUseCase
+import com.shared.security.application.usecases.jwt.JwtSigningKeyPort
+import com.shared.security.application.usecases.jwt.RunJwtSigningKeyHealthCheckUseCase
+import com.shared.security.application.usecases.jwt.RunJwtSigningKeyPriorTtlUseCase
+import com.shared.security.application.usecases.jwt.RunJwtSigningKeyRetentionUseCase
+import com.shared.security.application.usecases.jwt.SignJwtUseCase
 import com.shared.security.infrastructure.audit.Slf4jAuditLogAdapter
+import com.shared.security.infrastructure.config.EnvJwtAudienceAllowList
 import com.shared.security.infrastructure.config.RateLimitConfig
 import com.shared.security.infrastructure.tls.MtlsConfig
 import kotlinx.datetime.Clock
 import org.koin.dsl.module
 import org.slf4j.LoggerFactory
+import kotlin.time.Duration.Companion.hours
 
 private val logger = LoggerFactory.getLogger("com.shared.security.infrastructure.di.SecurityServiceModule")
 
@@ -76,7 +93,11 @@ val securityServiceModule =
             val refill = if (config.enabled) config.refillTokensPerSecond else 1.0
             PerSubjectRateLimiter(capacity = capacity, refillTokensPerSecond = refill, clock = Clock.System)
         }
-        single<AuditLogPort> { buildAuditLogAdapter() }
+        // SecurityDatabase is registered only when SECURITY_DB_ENABLED=true (or default).
+        // JWT layer bindings call `getOrNull<SecurityDatabase>()` and fail loudly if absent.
+        val sharedDb: SecurityDatabase? = provideSecurityDatabase()
+        if (sharedDb != null) single<SecurityDatabase> { sharedDb }
+        single<AuditLogPort> { buildAuditLogAdapter(sharedDb) }
 
         // Crypto layer — wire CryptoKeyServicePort + use cases.
         // The real ML-KEM service is bound when at least one of the suffixed env-var pairs
@@ -129,15 +150,72 @@ val securityServiceModule =
             logger.info("AdminAllowList → StaticAdminAllowList(size=${subjects.size})")
             StaticAdminAllowList(subjects)
         }
+
+        // Stream K K.0 — JWT signing-key layer. All three port bindings require the shared
+        // SecurityDatabase; the JWT layer is unusable without it.
+        single<KekRepository> {
+            val db =
+                requireNotNull(getOrNull<SecurityDatabase>()) {
+                    "JWT signing-key layer requires SECURITY_DB_ENABLED=true (ExposedKekRepository needs the DB)"
+                }
+            ExposedKekRepository(db.database)
+        }
+        single<KekEnvelopePort> { KekEnvelopeAdapter(get<CryptoKeyServicePort>(), get<KekRepository>()) }
+        single<JwtSigningKeyPort> { Es256JwtSigningKeyAdapter() }
+        single<JwtSigningKeyRepository> {
+            val db =
+                requireNotNull(getOrNull<SecurityDatabase>()) {
+                    "JWT signing-key layer requires SECURITY_DB_ENABLED=true"
+                }
+            ExposedJwtSigningKeyRepository(db.database)
+        }
+        single<JwtAudienceAllowList> {
+            EnvJwtAudienceAllowList(System.getenv("SECURITY_JWT_AUDIENCE_ALLOWLIST"))
+        }
+        single { GenerateJwtSigningKeyPairUseCase(get(), get(), get(), get()) }
+        single { ActivateJwtSigningKeyUseCase(get(), get()) }
+        single { SignJwtUseCase(get(), get(), get(), get(), get()) }
+        single { RunJwtSigningKeyHealthCheckUseCase(get(), get(), get(), get()) }
+        single {
+            RunJwtSigningKeyPriorTtlUseCase(
+                repo = get(),
+                auditLog = get(),
+                ttl = JWT_PRIOR_TTL_HOURS.hours,
+            )
+        }
+        single {
+            RunJwtSigningKeyRetentionUseCase(
+                repo = get(),
+                auditLog = get(),
+                retentionWindow = JWT_QUIESCED_RETENTION_HOURS.hours,
+                retentionDays = JWT_RETIRED_RETENTION_DAYS,
+            )
+        }
     }
+
+private const val JWT_PRIOR_TTL_HOURS: Long = 24L
+private const val JWT_QUIESCED_RETENTION_HOURS: Long = 24L
+private const val JWT_RETIRED_RETENTION_DAYS: Long = 90L
+
+/**
+ * Build the shared [SecurityDatabase] instance once, or return null when DB-backed mode is
+ * disabled. Runs Flyway migrations on first call. Used by both the audit log adapter and
+ * the JWT signing-key layer; they share a single Hikari pool.
+ */
+private fun provideSecurityDatabase(): SecurityDatabase? {
+    if (!SecurityDatabaseConfig.isEnabled()) return null
+    val dbConfig = SecurityDatabaseConfig.fromEnv()
+    val database = SecurityDatabase.create(dbConfig)
+    SecurityFlywayMigrator(database.dataSource).migrate()
+    return database
+}
 
 /**
  * Decides between the SLF4J fallback and the persistent HMAC-chained adapter based on
- * `SECURITY_DB_ENABLED`. Side-effects: starts a Hikari pool and runs Flyway migrations
- * when DB-backed mode is selected. Idempotent across startup retries.
+ * whether [provideSecurityDatabase] produced a database (i.e. `SECURITY_DB_ENABLED=true`).
  */
-private fun buildAuditLogAdapter(): AuditLogPort {
-    if (!SecurityDatabaseConfig.isEnabled()) {
+private fun buildAuditLogAdapter(database: SecurityDatabase?): AuditLogPort {
+    if (database == null) {
         logger.warn(
             "DEV-ONLY: SECURITY_DB_ENABLED=false → binding Slf4jAuditLogAdapter (in-memory log " +
                 "fallback). The tamper-evident HMAC-SHA-512 audit chain is DISABLED. This is " +
@@ -146,9 +224,6 @@ private fun buildAuditLogAdapter(): AuditLogPort {
         )
         return Slf4jAuditLogAdapter()
     }
-    val dbConfig = SecurityDatabaseConfig.fromEnv()
-    val database = SecurityDatabase.create(dbConfig)
-    SecurityFlywayMigrator(database.dataSource).migrate()
     val hmacKey = AuditHmacKeyProvider.fromEnv()
     val hasher = AuditChainHasher(hmacKey)
     logger.info("SECURITY_DB_ENABLED=true → binding ExposedAuditLogRepository with HMAC-SHA-512 chain")

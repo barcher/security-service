@@ -8,13 +8,14 @@ This file is kept current per ticket: each stream's tickets either toggle a stat
 **Planned** / **Partial** to **Implemented**, or add a new row. ArchUnit rule **S-7**
 (Stream F) blocks the addition of any new doc that isn't in `docs/README.md`'s allowlist.
 
-> Re-graded at each stream's close. **Last update: 2026-05-22 — Stream K K.0 foundations + shared-security-client Phase 1+2 cross-cutting.**
+> Re-graded at each stream's close. **Last update: 2026-05-23 — Stream K K.0 complete (full server-side surface + integration test).**
 >
 > Catch-up summary since Stream G kickoff:
 > - Streams G–H + SKS-G12 (22 repos wired through `EncryptedColumnWriter`) shipped.
 > - SKS-H08/H09/H10/H11 + H06/H07 (frontend stale-state) shipped.
 > - **shared-security-client Phase 1+2 (2026-05-22):** canonical client library extracted to `workAutomations/shared-security-client/`; monolith + financial-service consumers refactored; S-9 ArchUnit byte-identity rule retired (one canonical port, not two).
 > - **Stream K K.0 foundations (2026-05-22):** v0.2 proposal approved; `jwt_signing_keys` Flyway V5 migration; `JwtSigningKeyRepository` + `JwtAudienceAllowList` ports; `KekEnvelopePort` (internal-port pattern) + `KekEnvelopeAdapter` (AAD-binding bridge); `Es256SigningService` in new `adapters/outbound/jwt-signing/` submodule; JWT event types added to `AuditEventType`; `HSM_KEY_CEREMONY.md` runbook for KEK + JWT signing keys.
+> - **Stream K K.0 complete (2026-05-23):** `ExposedJwtSigningKeyRepository` + integration test (Testcontainers MySQL); `EnvJwtAudienceAllowList` with subject-DN-hash env-var schema; three use cases (`Generate`, `Activate`, `Sign`) + three Quartz jobs (health hourly, prior-TTL daily, retention daily); `POST /v1/jwt/sign` + `GET /v1/jwks` HTTP routes wired in `Application.kt`; operator CLI subcommands `jwt-keys generate-pair` + `jwt-keys activate`; SecurityServiceModule DI binds the full chain (shared `SecurityDatabase` across audit + JWT); ArchUnit rules **S-11** (jwt-signing module isolation), **S-12** (jwt use cases never import `CryptoKeyServicePort`), **S-13** (`KekEnvelopePort` has exactly one implementer); operator + cutover runbooks shipped (`JWT_OPERATIONS.md`, `JWT_KEY_LIFECYCLE.md`, `JWT_CUTOVER.md`) + added to docs allowlist; end-to-end Testcontainers integration test exercises generate → activate → sign → local-verify against ML-KEM-768 KEK + stored SPKI.
 
 ## Posture summary
 
@@ -201,7 +202,7 @@ N=1 in Stream C deployments.
 | Backup independence | `BACKUP_KEY` separate from KEK; backup verifier port abstracted | `application/ports/KekBackupVerifierPort.kt` |
 | **HSM ceremony procedure (v0.2)** | Two-person observed ceremony for initial setup, rotation, emergency replacement, disposal; YubiHSM 2 default with cloud-KMS alternative documented | [`HSM_KEY_CEREMONY.md`](HSM_KEY_CEREMONY.md) |
 
-### JWT signing-key lifecycle (Stream K — K.0 in progress)
+### JWT signing-key lifecycle (Stream K — K.0 complete)
 
 The JWT signing path mirrors the KEK lifecycle (same state machine, same audit-event
 discipline, same backup expectations) with one structural addition: a narrow internal
@@ -210,13 +211,17 @@ port (`KekEnvelopePort`) isolates the JWT use cases from the wider `CryptoKeySer
 | Control | Implementation | Reference |
 |---------|----------------|-----------|
 | Singleton-ACTIVE invariant | Schema-enforced via generated column + unique index | `V5__jwt_signing_keys.sql` |
-| Lifecycle state machine | STAGED → ACTIVE → PRIOR → QUIESCED → RETIRED | `JwtSigningKeyStatus.kt` (planned: `JWT_KEY_LIFECYCLE.md` per SKS-K13) |
+| Lifecycle state machine | STAGED → ACTIVE → PRIOR → QUIESCED → RETIRED | [`JWT_KEY_LIFECYCLE.md`](JWT_KEY_LIFECYCLE.md) |
 | Wrapped-at-rest | Private bytes are KEK-wrapped via `KekEnvelopePort` with AAD-binding (`jwt-signing-key:<kid>`). Plaintext never touches disk outside the HSM | `KekEnvelopeAdapter.kt` |
-| Cross-module isolation | JWT use cases consume `KekEnvelopePort`, NEVER `CryptoKeyServicePort` directly. `KekEnvelopeAdapter` is the exclusive bridge (planned ArchUnit S-12 + S-13 land with SKS-K01a) | `application/ports/KekEnvelopePort.kt` |
+| Cross-module isolation | JWT use cases consume `KekEnvelopePort`, NEVER `CryptoKeyServicePort` directly. `KekEnvelopeAdapter` is the exclusive bridge. ArchUnit rules S-11/S-12/S-13 enforce | `SecurityBoundaryArchTest.kt` |
 | Signing primitive isolation | `Es256SigningService` lives in dedicated `adapters/outbound/jwt-signing/` submodule; never collocated with KEK/DEK crypto module | `Es256SigningService.kt` |
+| HTTP surface | `POST /v1/jwt/sign` (mTLS-required) + `GET /v1/jwks` (public, 5-min cache) | [`JWT_OPERATIONS.md`](JWT_OPERATIONS.md) |
+| Quartz lifecycle jobs | Health (hourly) + PRIOR-TTL (daily) + retention (daily); all `@DisallowConcurrentExecution` | [`JWT_KEY_LIFECYCLE.md`](JWT_KEY_LIFECYCLE.md) §2 |
+| Operator CLI | `jwt-keys generate-pair [--activate]` + `jwt-keys activate --kid=<hex>` — same trust model as `generate-kek` | `JwtKeysCli.kt` |
 | HSM ceremony procedure | Same two-person ceremony pattern as KEK; differences (algorithm, wrapping, publication) called out explicitly | [`HSM_KEY_CEREMONY.md`](HSM_KEY_CEREMONY.md) §3 |
-| Caller authentication (two-gate) | Gate 1: mTLS subject DN (existing `MtlsAuthPlugin`). Gate 2: `JwtAudienceAllowList.isAllowed(subjectDn, audience)` — denies cross-audience minting even with valid mTLS | `application/ports/JwtAudienceAllowList.kt` |
+| Caller authentication (two-gate) | Gate 1: mTLS subject DN (existing `MtlsAuthPlugin`). Gate 2: `EnvJwtAudienceAllowList.isAllowed(subjectDn, audience)` — denies cross-audience minting even with valid mTLS | `EnvJwtAudienceAllowList.kt` |
 | Four-lane subject-DN separation | Operational / admin / dashboard-observer / operator-decrypt cert lanes recorded as distinct `actor_subject` prefixes for audit filtering | Proposal §3.4a |
+| End-to-end integration test | Testcontainers MySQL → V5 migration → seed ACTIVE KEK → generate + activate JWT key → mint JWT → local verify against stored SPKI | `JwtSignAndJwksIntegrationTest.kt` |
 
 ### Cross-cutting — shared-security-client library (2026-05-22)
 

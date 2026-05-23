@@ -60,6 +60,9 @@ interface JwtSigningKeyRepository {
 
     /** Delete the row for a RETIRED key whose `retain_until` is in the past. */
     suspend fun deleteRetired(kid: ByteArray): Boolean
+
+    /** All RETIRED keys whose `retain_until <= [now]`. Used by the retention sweep. */
+    suspend fun findRetiredEligibleForDelete(now: Instant): List<JwtSigningKeyRecord>
 }
 
 /**

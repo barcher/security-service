@@ -103,6 +103,9 @@ class DocsAllowlistTest {
                 "CERT_GENERATION.md",
                 "TRUST_MODEL.md",
                 "HSM_KEY_CEREMONY.md",
+                "JWT_OPERATIONS.md",
+                "JWT_KEY_LIFECYCLE.md",
+                "JWT_CUTOVER.md",
             )
     }
 }

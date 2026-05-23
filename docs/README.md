@@ -20,6 +20,9 @@ allowlist fails CI.
 | `CERT_GENERATION.md` | ✅ written | Stream E | OpenSSL recipes for the PKCS12 server + client keystores (ECDSA P-384). |
 | `TRUST_MODEL.md` | ✅ written | Stream E follow-up | Self-contained architecture doc: three trust authorities (workload mTLS, ingress, KEK), why security-service IS the dev CA, prod replacement via Linkerd + HSM-backed offline trust anchor. |
 | `HSM_KEY_CEREMONY.md` | ✅ written | Stream K (2026-05-22) | Operator runbook for KEK + JWT signing-key initial setup, scheduled rotation, emergency replacement, and disposal. HSM-anchored (YubiHSM 2 default); cloud-KMS alternative path documented but non-default. |
+| `JWT_OPERATIONS.md` | ✅ written | Stream K K.0 | HTTP reference for `POST /v1/jwt/sign` + `GET /v1/jwks`. Two-gate caller-auth contract (mTLS + audience allow-list), JWS header format, error catalog, `SECURITY_JWT_AUDIENCE_ALLOWLIST` env-var schema. |
+| `JWT_KEY_LIFECYCLE.md` | ✅ written | Stream K K.0 | State machine + Quartz job catalog for `jwt_signing_keys`. Singleton-ACTIVE invariant, PRIOR/QUIESCED grace windows, default TTLs + retention rationale, operator CLI invocations. |
+| `JWT_CUTOVER.md` | ✅ written | Stream K K.2 + K.3 | Operator playbook for monolith HS256 → security-service ES256 migration. Pre-flight checklist, phase-by-phase rollout, Grafana gates for K.3 deletion, failure-mode recovery. |
 
 Anything outside this list belongs in the top-level [`README.md`](../README.md), in
 [`.env.example`](../.env.example), or in the source itself as a KDoc block. No

@@ -43,6 +43,7 @@ dependencies {
     implementation(libs.exposed.core)
     implementation(libs.exposed.jdbc)
     implementation(project(":adapters:outbound:crypto"))
+    implementation(project(":adapters:outbound:jwt-signing"))
 
     implementation(libs.kotlin.stdlib)
     implementation(libs.dotenv.kotlin)
@@ -67,11 +68,30 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.archunit.junit5)
+    testImplementation(libs.testcontainers.mysql)
+    testImplementation(libs.testcontainers.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.kotlinx.datetime)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-tasks.withType<Test> {
-    useJUnitPlatform()
+// Unit tests: exclude @Tag("integration") so `./gradlew test` runs without Docker.
+tasks.named<Test>("test") {
+    useJUnitPlatform {
+        excludeTags("integration")
+    }
+}
+
+// Integration tests: only @Tag("integration") tests — requires Docker with MySQL 8.0
+tasks.register<Test>("integrationTest") {
+    useJUnitPlatform {
+        includeTags("integration")
+    }
+    group = "verification"
+    description = "Runs integration tests (requires Docker)"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    shouldRunAfter("test")
 }
 
 // Run the application from the security-service root so relative paths in .env

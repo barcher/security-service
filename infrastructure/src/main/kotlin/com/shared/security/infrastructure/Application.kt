@@ -7,17 +7,23 @@ import com.shared.security.adapters.inbound.http.auth.installMtlsAuth
 import com.shared.security.adapters.inbound.http.installAdminRoutes
 import com.shared.security.adapters.inbound.http.installCryptoRoutes
 import com.shared.security.adapters.inbound.http.installHealthRoute
+import com.shared.security.adapters.inbound.http.installJwksRoutes
+import com.shared.security.adapters.inbound.http.installJwtSignRoutes
 import com.shared.security.adapters.inbound.http.ratelimit.PerSubjectRateLimiter
 import com.shared.security.application.ports.AdminAllowList
 import com.shared.security.application.ports.AuditLogPort
+import com.shared.security.application.ports.JwtSigningKeyRepository
 import com.shared.security.application.usecases.GenerateDekUseCase
 import com.shared.security.application.usecases.GenerateNewKekPairUseCase
 import com.shared.security.application.usecases.GetKeyStatusUseCase
 import com.shared.security.application.usecases.RewrapDekUseCase
 import com.shared.security.application.usecases.UnwrapDekUseCase
 import com.shared.security.application.usecases.WrapDekUseCase
+import com.shared.security.application.usecases.jwt.JwtSigningKeyPort
+import com.shared.security.application.usecases.jwt.SignJwtUseCase
 import com.shared.security.infrastructure.cli.GenerateKekCli
 import com.shared.security.infrastructure.cli.ImportMonolithDeksCli
+import com.shared.security.infrastructure.cli.JwtKeysCli
 import com.shared.security.infrastructure.config.RateLimitConfig
 import com.shared.security.infrastructure.di.securityServiceModule
 import com.shared.security.infrastructure.tls.MtlsConfig
@@ -59,13 +65,17 @@ fun main(args: Array<String>) {
             ImportMonolithDeksCli().run(args.drop(1))
             return
         }
+        "jwt-keys" -> {
+            JwtKeysCli().run(args.drop(1))
+            return
+        }
         null, "" -> {
             // fall through to server start
         }
         else -> {
             System.err.println(
                 "Unknown subcommand '${args[0]}'. Supported subcommands: generate-kek, " +
-                    "import-monolith-deks. Run with no arguments to start the HTTP server.",
+                    "import-monolith-deks, jwt-keys. Run with no arguments to start the HTTP server.",
             )
             kotlin.system.exitProcess(2)
         }
@@ -247,6 +257,9 @@ fun Application.securityModule() {
     val generateNewKekPair by inject<GenerateNewKekPairUseCase>()
     val getKeyStatus by inject<GetKeyStatusUseCase>()
     val adminAllowList by inject<AdminAllowList>()
+    val signJwt by inject<SignJwtUseCase>()
+    val jwtSigningKeyRepo by inject<JwtSigningKeyRepository>()
+    val jwtSigningPort by inject<JwtSigningKeyPort>()
     logger.info(
         "Resolved RateLimitConfig: enabled={} capacity={} refillPerSec={} (env vars: {}, {}, {})",
         rateLimitConfig.enabled,
@@ -274,5 +287,7 @@ fun Application.securityModule() {
             generateNewKekPair = generateNewKekPair,
             getKeyStatus = getKeyStatus,
         )
+        installJwtSignRoutes(signJwt = signJwt)
+        installJwksRoutes(repo = jwtSigningKeyRepo, signing = jwtSigningPort)
     }
 }
