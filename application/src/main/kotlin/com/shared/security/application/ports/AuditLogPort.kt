@@ -126,4 +126,13 @@ object AuditEventType {
     const val JWT_SIGNED = "JWT_SIGNED"
     const val JWT_AUDIENCE_FORBIDDEN = "JWT_AUDIENCE_FORBIDDEN"
     const val JWT_SIGN_FAILED = "JWT_SIGN_FAILED"
+
+    // Observability surface (Stream L L.0) — emitted by ObservabilityRoutes for every
+    // GET under /v1/observability/. The dashboard-observer mTLS lane is structurally
+    // separate from the admin lane so these rows have a distinct actor_subject prefix
+    // for forensics.
+    const val DASHBOARD_OBSERVED = "DASHBOARD_OBSERVED"
+    const val OBSERVER_FORBIDDEN = "OBSERVER_FORBIDDEN"
+    const val OBSERVABILITY_RATE_LIMIT_EXCEEDED = "OBSERVABILITY_RATE_LIMIT_EXCEEDED"
+    const val OBSERVABILITY_ERROR = "OBSERVABILITY_ERROR"
 }

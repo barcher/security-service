@@ -186,6 +186,16 @@ class ExposedJwtSigningKeyRepository(
             }
         }
 
+    override suspend fun findAll(): List<JwtSigningKeyRecord> =
+        withContext(Dispatchers.IO) {
+            transaction(database) {
+                JwtSigningKeysTable
+                    .selectAll()
+                    .orderBy(JwtSigningKeysTable.createdAt to SortOrder.DESC)
+                    .map { it.toRecord() }
+            }
+        }
+
     override suspend fun findRetiredEligibleForDelete(now: Instant): List<JwtSigningKeyRecord> =
         withContext(Dispatchers.IO) {
             transaction(database) {

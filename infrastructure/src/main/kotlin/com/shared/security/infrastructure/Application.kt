@@ -9,6 +9,7 @@ import com.shared.security.adapters.inbound.http.installCryptoRoutes
 import com.shared.security.adapters.inbound.http.installHealthRoute
 import com.shared.security.adapters.inbound.http.installJwksRoutes
 import com.shared.security.adapters.inbound.http.installJwtSignRoutes
+import com.shared.security.adapters.inbound.http.installObservabilityRoutes
 import com.shared.security.adapters.inbound.http.ratelimit.PerSubjectRateLimiter
 import com.shared.security.application.ports.AdminAllowList
 import com.shared.security.application.ports.AuditLogPort
@@ -260,6 +261,17 @@ fun Application.securityModule() {
     val signJwt by inject<SignJwtUseCase>()
     val jwtSigningKeyRepo by inject<JwtSigningKeyRepository>()
     val jwtSigningPort by inject<JwtSigningKeyPort>()
+    val observerAllowList by inject<com.shared.security.application.ports.DashboardObserverAllowList>()
+    val listKeksObservation by
+        inject<com.shared.security.application.usecases.observation.ListKeksObservationUseCase>()
+    val listDeksObservation by
+        inject<com.shared.security.application.usecases.observation.ListDeksObservationUseCase>()
+    val listJwtKeysObservation by
+        inject<com.shared.security.application.usecases.observation.ListJwtSigningKeysObservationUseCase>()
+    val searchAuditObservation by
+        inject<com.shared.security.application.usecases.observation.SearchAuditEventsObservationUseCase>()
+    val listRecentRotationsObservation by
+        inject<com.shared.security.application.usecases.observation.ListRecentRotationsObservationUseCase>()
     logger.info(
         "Resolved RateLimitConfig: enabled={} capacity={} refillPerSec={} (env vars: {}, {}, {})",
         rateLimitConfig.enabled,
@@ -289,5 +301,15 @@ fun Application.securityModule() {
         )
         installJwtSignRoutes(signJwt = signJwt)
         installJwksRoutes(repo = jwtSigningKeyRepo, signing = jwtSigningPort)
+        installObservabilityRoutes(
+            observerAllowList = observerAllowList,
+            auditLog = auditLog,
+            rateLimiter = if (rateLimitConfig.enabled) rateLimiter else null,
+            listKeks = listKeksObservation,
+            listDeks = listDeksObservation,
+            listJwtSigningKeys = listJwtKeysObservation,
+            searchAuditEvents = searchAuditObservation,
+            listRecentRotations = listRecentRotationsObservation,
+        )
     }
 }

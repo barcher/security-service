@@ -19,6 +19,7 @@ This file is kept current per ticket: each stream's tickets either toggle a stat
 > - **Stream K K.1 complete (2026-05-23):** consumer-side dual-stack verify path lives in `workAutomations/shared-security-client/src/main/kotlin/com/shared/security/client/jwt/` — `TokenServiceClient` port, `JwksDocumentCache` interface + `HttpJwksDocumentCache` (hourly tick + on-`kid`-miss refresh + stale-OK + exp backoff), `LocalJwksVerifierAdapter` (ES256-only, hard-rejects `alg=none|HS*|RS*`, 5s clock skew), `NoOpTokenServiceClient` fail-closed default, `JwtClientConfig` + `resolveTokenServiceClient()`. Monolith carves `LegacyHs256JwtVerifier` out of `JwtTokenService` and ships a `DualStackJwtAuthProvider` that dispatches on the JWS `kid` header → ES256 shared-client verify or legacy HS256 verify. JWKS refresh coroutine wired in `Application.configureJwksRefresh`. Refresh-token entropy bumped 32→64 bytes per K-amend-6. ArchUnit ratchets: **SC-5** (jwt/ ↛ crypto/ and vice versa in shared client), **M-11** (`LegacyHs256JwtVerifier` constructor calls only from `AppModuleKt`), **M-13** (no monolith class re-implements `TokenServiceClient`). 33 shared-client tests + 3 monolith K.1 tests, all passing. Mint path is unchanged — still HS256 — that flips in K.2.
 > - **Stream K K.2 complete (2026-05-23):** monolith mint path flipped to remote. Shared-client gained `JwtSignRequest` + `JwtSignResult`, `RemoteTokenServiceAdapter` (mTLS POST `/v1/jwt/sign`, no retries on sign), `LocalDevTokenServiceClient` (in-process ES256 keypair for dev), `CompositeTokenServiceClient` (verify + sign halves wired together). `TokenServicePort.generateAccessToken` is now `suspend`. Monolith ships `RemoteJwtTokenServiceShim` implementing `TokenServicePort` via `TokenServiceClient.sign()`; `RefreshTokenGenerator` carved out (refresh tokens stay local per Shared Key Service rule 17). Issue-path metrics: `jwt_issue_algorithm_total{algorithm,outcome}` + `jwt_issue_latency_seconds`. **K-amend-6 RefreshTokenCleanupJob** (Quartz, daily 03:00 UTC, batch-ceiling 50 000 in 1000-row chunks, audit `REFRESH_TOKEN_CLEANUP_RUN`, `refresh_token_cleanup_*` metrics). 11 RemoteAdapter tests + 2 LocalDev tests + 6 cleanup-use-case tests + integration test, all passing.
 > - **Stream K K.3 complete (2026-05-23 — operator gate overridden per user direction):** `JwtTokenService`, `LegacyHs256JwtVerifier`, `JwtConfig.secret`, `JWT_SECRET` env var, `JwtTokenServiceRefreshTokenEntropyTest`, and `DualStackJwtAuthProvider` deleted. New `EsJwtAuthProvider` is ES256-only; verify metric `jwt_verify_algorithm_total{algorithm="HS256"}` now always 0 (kept exporting as a smoke alarm). `TokenServicePort.validateToken` removed. WebSocket query-string auth (`WebSocketRoutes`, `financialWebSocketRoute`) refactored to verify through the shared-client `TokenServiceClient`. ArchUnit ratchet tightened: **M-11 retired** (verifier deleted), **M-10 armed** with `STREAM_K_LEGACY_EXEMPTIONS = emptySet()` — class-level check (`com.auth0.jwt.algorithms.Algorithm`) plus source-grep companion (`"HS256"` + `"JWT_SECRET"` string literals). M-13 unchanged. New `RefreshTokenGeneratorTest` replaces the deleted entropy test. `.env.example`, `application.conf`, `docs/API_KEYS.md` all swept of `JWT_SECRET` references. Full eval (ktlint + detekt + test + build) green.
+> - **Stream L L.0 complete (2026-05-23):** read-only observability surface under `/v1/observability/`. New `DashboardObserverAllowList` port + `StaticDashboardObserverAllowList` impl gated by `SECURITY_DASHBOARD_OBSERVER_SUBJECTS` env var (separate lane from `SECURITY_ADMIN_SUBJECTS`). Four new audit event types: `DASHBOARD_OBSERVED`, `OBSERVER_FORBIDDEN`, `OBSERVABILITY_RATE_LIMIT_EXCEEDED`, `OBSERVABILITY_ERROR`. Five use cases (`ListKeks`, `ListDeks`, `ListJwtSigningKeys`, `SearchAuditEvents`, `ListRecentRotations`) all metadata-only — strip `wrappedDekBytes`, `wrappedPrivateKeyBytes`, `publicKeySpki`, `prev_hmac`, `row_hmac`. New read-side `AuditLogQueryPort` + `ExposedAuditLogQueryRepository` (write-side `AuditLogPort` unchanged). Five GET routes in `ObservabilityRoutes` — mTLS + Gate-2 allow-list + per-subject rate limit, ONE `DASHBOARD_OBSERVED` audit per call regardless of result-set size. ArchUnit ratchet: **S-14** (observation surface never imports crypto primitive ports), **S-15** (`ObservabilityRoutes` mounts only `/v1/observability/*` paths via source-grep), **S-16** (allow-list referenced only from routes + DI). `OBSERVABILITY_API.md` + `AUDIT_LOG.md` event-type catalog updated. 25 use-case unit tests + 11 ArchUnit tests, all passing.
 
 ## Posture summary
 
@@ -226,6 +227,27 @@ port (`KekEnvelopePort`) isolates the JWT use cases from the wider `CryptoKeySer
 | Four-lane subject-DN separation | Operational / admin / dashboard-observer / operator-decrypt cert lanes recorded as distinct `actor_subject` prefixes for audit filtering | Proposal §3.4a |
 | End-to-end integration test | Testcontainers MySQL → V5 migration → seed ACTIVE KEK → generate + activate JWT key → mint JWT → local verify against stored SPKI | `JwtSignAndJwksIntegrationTest.kt` |
 
+### Observability surface (Stream L — L.0 complete)
+
+Read-only dashboard surface under `/v1/observability/`. Lifecycle metadata only — no
+key bytes, no audit-chain HMACs, no wrapped blobs. Four-lane subject-DN model: a
+compromised dashboard observer cert can read metadata but cannot rotate, unwrap, sign,
+or mint keys.
+
+| Control | Implementation | Reference |
+|---------|----------------|-----------|
+| Two-gate caller auth | Gate 1: mTLS (`MtlsAuthPlugin`); Gate 2: `DashboardObserverAllowList.isObserver(subjectDn)` | `ObservabilityRoutes.kt` |
+| Observer allow-list (distinct from admin) | `SECURITY_DASHBOARD_OBSERVER_SUBJECTS` env var; ArchUnit S-16 keeps the port referenced only from routes + DI | `StaticDashboardObserverAllowList.fromEnv` |
+| Metadata-only DTOs | Use-case-layer projections strip `wrappedDekBytes`, `wrappedPrivateKeyBytes`, `publicKeySpki`; query-port strips `prev_hmac`/`row_hmac` | `ObservationDtos.kt` + `AuditLogQueryPort` |
+| Read-side audit query port | New `AuditLogQueryPort` + `ExposedAuditLogQueryRepository` — write side (`AuditLogPort`) is untouched, so observers cannot mutate the chain | `AuditLogQueryPort.kt` |
+| Rate limit | Per-subject token bucket; shares the same `SECURITY_RATE_LIMIT_*` config as `/v1/dek/unwrap` for K.0 | `ObservabilityRoutes.handle()` |
+| Audit emission | ONE `DASHBOARD_OBSERVED` per call regardless of result-set size; 403 → `OBSERVER_FORBIDDEN`; 429 → `OBSERVABILITY_RATE_LIMIT_EXCEEDED`; 500 → `OBSERVABILITY_ERROR` | each L use case |
+| Cross-module isolation | ArchUnit S-14: observation surface never imports `CryptoKeyServicePort` / `KekEnvelopePort` / `JwtSigningKeyPort`. S-15: source-grep confirms `/v1/observability/*`-only mounts. | `SecurityBoundaryArchTest` |
+
+| Dimension | Score | Notes |
+|-----------|-------|-------|
+| **Observability surface** | B+ | All structural invariants in place; caveat: shares the per-subject rate-limit bucket with `/v1/dek/unwrap` (a future stream may add a dedicated `SECURITY_OBSERVABILITY_RATE_LIMIT_*` family). |
+
 ### Cross-cutting — shared-security-client library (2026-05-22)
 
 Phase 1+2 of the `shared_security_client.md` proposal extracted the canonical base
@@ -258,6 +280,9 @@ Every failure that leaves a visible state change emits an audit row. The catalog
 | JWT sign request rejected by audience allow-list (Stream K) | `JWT_AUDIENCE_FORBIDDEN` | false |
 | JWT sign failed (key unavailable, sign exception) (Stream K) | `JWT_SIGN_FAILED` | false |
 | JWT signing-key health-probe failed (Stream K) | `JWKS_HEALTH_CHECK_FAILED` | false |
+| Observer DN not in allow-list (Stream L) | `OBSERVER_FORBIDDEN` | false |
+| Observability rate-limit cap exceeded (Stream L) | `OBSERVABILITY_RATE_LIMIT_EXCEEDED` | false |
+| Observability handler raised an exception (Stream L) | `OBSERVABILITY_ERROR` | false |
 
 All of the above are queryable via the persistent audit log (Stream C onward) and feed
 the cold-storage shipper. Transient failures (network blips on cold-storage ship, network
@@ -285,6 +310,8 @@ Stream K adds successful-event types as well: `JWKS_KEY_GENERATED`, `JWKS_KEY_AC
 | SC-13 (cryptographic protection) | ✅ | AES-256-GCM AEAD with AAD-bound wrap; AAD now extends to JWT signing-key envelopes via `KekEnvelopePort.wrap(plaintext, aad)` (Stream K K.0) |
 | SC-28 (protection of information at rest) | ✅ | DEKs wrapped under KEK; KEK at rest in mounted secret store (HSM in prod per `TRUST_MODEL.md` + `HSM_KEY_CEREMONY.md`); JWT signing-key private bytes wrapped under KEK in `jwt_signing_keys.wrapped_private_key_bytes` |
 | IA-5 (authenticator management) | ✅ | ES256 (P-256) JWT issuance + ML-KEM-768 KEK lifecycle both managed via Stream K. HS256 deleted in K.3 (operator gate overridden per user direction; ArchUnit M-10 strict prevents reintroduction). |
+| AU-2 (auditable events) | ✅ | Stream L L.0 added `DASHBOARD_OBSERVED`, `OBSERVER_FORBIDDEN`, `OBSERVABILITY_RATE_LIMIT_EXCEEDED`, `OBSERVABILITY_ERROR` — every observation attempt is auditable. |
+| AU-12 (audit generation) | ✅ | The observability surface itself writes audit rows for every call; failures emit structured rows BEFORE responding. |
 | SI-7 (software integrity) | ⚠️ | Stream F adds reproducible-build attestation + signed releases |
 
 ✅ = covered as of Stream C+G+H+K-foundations. ⚠️ = covered structurally, partial implementation; lands in

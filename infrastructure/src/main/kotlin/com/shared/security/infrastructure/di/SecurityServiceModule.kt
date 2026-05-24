@@ -191,6 +191,37 @@ val securityServiceModule =
                 retentionDays = JWT_RETIRED_RETENTION_DAYS,
             )
         }
+
+        // Stream L L.0 — observability layer. Distinct allow-list from AdminAllowList;
+        // distinct env var; same database. The observability use cases share the existing
+        // audit-write port and add a dedicated read-side AuditLogQueryPort.
+        single<com.shared.security.application.ports.DashboardObserverAllowList> {
+            val raw = System.getenv("SECURITY_DASHBOARD_OBSERVER_SUBJECTS").orEmpty()
+            val sep = if (raw.contains(';')) ";" else ","
+            val subjects = raw.split(sep).map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+            logger.info(
+                "DashboardObserverAllowList → StaticDashboardObserverAllowList(size=${subjects.size})",
+            )
+            com.shared.security.application.ports.StaticDashboardObserverAllowList(subjects)
+        }
+        single<com.shared.security.application.ports.AuditLogQueryPort> {
+            val db =
+                requireNotNull(getOrNull<SecurityDatabase>()) {
+                    "Observability surface requires SECURITY_DB_ENABLED=true"
+                }
+            com.shared.security.adapters.outbound.persistence.audit.ExposedAuditLogQueryRepository(db.database)
+        }
+        single { com.shared.security.application.usecases.observation.ListKeksObservationUseCase(get(), get()) }
+        single { com.shared.security.application.usecases.observation.ListDeksObservationUseCase(get(), get()) }
+        single {
+            com.shared.security.application.usecases.observation.ListJwtSigningKeysObservationUseCase(get(), get())
+        }
+        single {
+            com.shared.security.application.usecases.observation.SearchAuditEventsObservationUseCase(get(), get())
+        }
+        single {
+            com.shared.security.application.usecases.observation.ListRecentRotationsObservationUseCase(get(), get())
+        }
     }
 
 private const val JWT_PRIOR_TTL_HOURS: Long = 24L

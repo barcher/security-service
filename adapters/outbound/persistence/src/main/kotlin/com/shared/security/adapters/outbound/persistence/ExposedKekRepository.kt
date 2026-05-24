@@ -10,6 +10,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.ResultRow
+import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.selectAll
@@ -59,6 +60,16 @@ class ExposedKekRepository(
                         it[retiredAt] = clock.now()
                     }
                 updated > 0
+            }
+        }
+
+    override suspend fun findAll(): List<KekRecord> =
+        withContext(Dispatchers.IO) {
+            transaction(database) {
+                KeksTable
+                    .selectAll()
+                    .orderBy(KeksTable.createdAt to SortOrder.DESC)
+                    .map { it.toRecord() }
             }
         }
 

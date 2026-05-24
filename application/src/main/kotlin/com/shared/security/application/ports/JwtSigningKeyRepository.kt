@@ -63,6 +63,13 @@ interface JwtSigningKeyRepository {
 
     /** All RETIRED keys whose `retain_until <= [now]`. Used by the retention sweep. */
     suspend fun findRetiredEligibleForDelete(now: Instant): List<JwtSigningKeyRecord>
+
+    /**
+     * All JWT signing-key rows ordered newest first by `created_at`. Used by the Stream L
+     * observability surface to render lifecycle history. The dashboard strips
+     * `wrappedPrivateKeyBytes` + `publicKeySpki` before serializing.
+     */
+    suspend fun findAll(): List<JwtSigningKeyRecord>
 }
 
 /**

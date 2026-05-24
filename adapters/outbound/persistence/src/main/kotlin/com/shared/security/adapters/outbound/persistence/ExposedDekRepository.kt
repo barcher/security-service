@@ -8,6 +8,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.Instant
 import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.ResultRow
+import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.statements.api.ExposedBlob
@@ -53,6 +54,22 @@ class ExposedDekRepository(private val database: Database) : DekRepository {
                     }
                 n > 0
             }
+        }
+
+    override suspend fun findRecent(limit: Int): List<DekRecord> =
+        withContext(Dispatchers.IO) {
+            transaction(database) {
+                DeksTable
+                    .selectAll()
+                    .orderBy(DeksTable.createdAt to SortOrder.DESC)
+                    .limit(limit)
+                    .map { it.toRecord() }
+            }
+        }
+
+    override suspend fun countAll(): Long =
+        withContext(Dispatchers.IO) {
+            transaction(database) { DeksTable.selectAll().count() }
         }
 
     private fun ResultRow.toRecord(): DekRecord =

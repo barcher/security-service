@@ -97,6 +97,9 @@ All values are constants in
 | **Health** (Stream C — `KekRotationHealthJob`) | `HEALTH_CHECK_OK`, `HEALTH_CHECK_FAILED` |
 | **Audit self-events** (Stream C — shipper) | `AUDIT_CHAIN_VERIFIED`, `AUDIT_CHAIN_BREAK`, `AUDIT_SHIPPED`, `AUDIT_RETENTION_DELETED` |
 | **KEK backup** (Stream C — `KekBackupVerifyJob`) | `KEK_BACKUP_VERIFIED`, `KEK_BACKUP_VERIFY_FAILED` |
+| **JWT lifecycle** (Stream K — K.0) | `JWKS_KEY_GENERATED`, `JWKS_KEY_ACTIVATED`, `JWKS_KEY_QUIESCED`, `JWKS_KEY_RETIRED`, `JWKS_KEY_DELETED`, `JWKS_HEALTH_CHECK_FAILED` |
+| **JWT signing operations** (Stream K — K.0) | `JWT_SIGNED`, `JWT_AUDIENCE_FORBIDDEN`, `JWT_SIGN_FAILED` |
+| **Observability surface** (Stream L — L.0) | `DASHBOARD_OBSERVED`, `OBSERVER_FORBIDDEN`, `OBSERVABILITY_RATE_LIMIT_EXCEEDED`, `OBSERVABILITY_ERROR` |
 
 ## Retention
 

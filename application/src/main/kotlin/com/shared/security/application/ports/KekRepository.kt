@@ -21,6 +21,13 @@ interface KekRepository {
 
     /** Transition [id] from PRIOR to RETIRED. Sets `retired_at = now`. */
     suspend fun retirePrior(id: String): Boolean
+
+    /**
+     * All KEK rows, newest first by `created_at`. Used by the Stream L observability
+     * surface to render the lifecycle history; no encrypted material is involved (this
+     * row carries only metadata).
+     */
+    suspend fun findAll(): List<KekRecord>
 }
 
 /**

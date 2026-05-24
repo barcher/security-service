@@ -170,6 +170,8 @@ class SignJwtUseCaseTest {
         override suspend fun deleteRetired(kid: ByteArray): Boolean = error("not used")
 
         override suspend fun findRetiredEligibleForDelete(now: Instant): List<JwtSigningKeyRecord> = emptyList()
+
+        override suspend fun findAll(): List<JwtSigningKeyRecord> = listOfNotNull(active)
     }
 
     private class StubKekEnvelope(private val returnPlaintext: ByteArray) : KekEnvelopePort {

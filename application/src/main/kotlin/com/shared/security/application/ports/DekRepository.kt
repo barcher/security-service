@@ -30,6 +30,16 @@ interface DekRepository {
         newWrappedBytes: ByteArray,
         updatedAt: Instant,
     ): Boolean
+
+    /**
+     * A bounded slice of DEK rows ordered by `created_at` desc. Used by the Stream L
+     * observability surface for the dashboard. The returned [DekRecord] still carries
+     * `wrappedDekBytes`; the observation use case strips that field before serializing.
+     */
+    suspend fun findRecent(limit: Int): List<DekRecord>
+
+    /** Total count of DEK rows. Used by the observation surface for the dashboard count. */
+    suspend fun countAll(): Long
 }
 
 data class DekRecord(

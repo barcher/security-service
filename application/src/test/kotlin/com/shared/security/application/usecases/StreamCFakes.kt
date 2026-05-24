@@ -89,6 +89,8 @@ class FakeKekRepository : KekRepository {
         return true
     }
 
+    override suspend fun findAll(): List<KekRecord> = byId.values.sortedByDescending { it.createdAt }
+
     fun seed(
         status: KekLifecycleStatus,
         createdAt: Instant = Instant.fromEpochMilliseconds(0),
@@ -138,6 +140,12 @@ class FakeDekRepository : DekRepository {
         rewraps += Triple(key, newKekId, newWrappedBytes)
         return true
     }
+
+    override suspend fun findRecent(limit: Int): List<DekRecord> {
+        return byHandle.values.sortedByDescending { it.createdAt }.take(limit)
+    }
+
+    override suspend fun countAll(): Long = byHandle.size.toLong()
 
     fun seed(
         kekId: String,
