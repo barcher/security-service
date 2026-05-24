@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://workautomations.example.com/schemas/operator_decrypt_output/1.0.json",
+  "title": "Operator Decrypt CLI Output",
+  "description": "Canonical output envelope for `security-service/tools/decrypt-cli`. Single-sided per feedback_operator_decrypt_cli_single_sided.md — no monolith-side sibling. Stored in tools/decrypt-cli/src/main/resources/ and validated by OperatorDecryptOutputSchemaTest on build. Schema-version bumps require a follow-up ticket; v1.0 is locked at M.0 sign-off.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "invocation",
+    "row_count",
+    "rows",
+    "warnings"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "Output-document schema version. Bumped only via coordinated PR.",
+      "const": "1.0"
+    },
+    "invocation": {
+      "$ref": "#/$defs/Invocation"
+    },
+    "row_count": {
+      "description": "Total number of decrypted rows in this document. Equal to rows.length.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "rows": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/DecryptedRow" }
+    },
+    "warnings": {
+      "description": "Non-fatal warnings encountered during the run (e.g. partial-page truncation note when --i-understand-large-export was opted in).",
+      "type": "array",
+      "items": { "type": "string", "maxLength": 1024 }
+    }
+  },
+  "$defs": {
+    "Invocation": {
+      "type": "object",
+      "required": [
+        "operator_email",
+        "reason",
+        "argument_vector",
+        "started_at",
+        "finished_at",
+        "side",
+        "dry_run",
+        "i_understand_large_export",
+        "i_accept_plaintext_on_disk",
+        "output_destination"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "operator_email": {
+          "description": "RFC 5322 email of the human running the CLI. Required CLI flag --operator-email.",
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "reason": {
+          "description": "Free-text operator-stated reason for the decrypt. Required CLI flag --reason. Must be 16..256 chars.",
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 256
+        },
+        "argument_vector": {
+          "description": "Full argv as parsed. NEVER contains plaintext — only flag names and table/ID references.",
+          "type": "array",
+          "items": { "type": "string", "maxLength": 512 },
+          "maxItems": 1024
+        },
+        "correlation_id": {
+          "description": "Optional incident-response correlation id (typically the same UUID written into a Pagerduty / Linear ticket).",
+          "type": [ "string", "null" ],
+          "maxLength": 64
+        },
+        "started_at": {
+          "description": "ISO-8601 UTC timestamp the CLI process started. Recorded in the audit row.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "description": "ISO-8601 UTC timestamp the CLI process completed. May equal started_at for fast runs.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "side": {
+          "description": "Which audit chain owns the OPERATOR_DECRYPT_RUN row for this invocation. Always 'security-service' for v1.0 — the monolith does not host a sibling CLI.",
+          "const": "security-service"
+        },
+        "dry_run": {
+          "description": "True when --dry-run was set. Plaintext is not actually emitted; row_count + rows reflect what WOULD have been decrypted.",
+          "type": "boolean"
+        },
+        "i_understand_large_export": {
+          "description": "True when the operator opted past the 10000-row / 24h hard cap with --i-understand-large-export. Recorded in audit detail_json.",
+          "type": "boolean"
+        },
+        "i_accept_plaintext_on_disk": {
+          "description": "True when the operator paired --output-file with --i-accept-plaintext-on-disk. Required to emit any plaintext to durable storage.",
+          "type": "boolean"
+        },
+        "output_destination": {
+          "description": "Where plaintext was written. 'stdout' is the default; 'file' requires both --output-file and --i-accept-plaintext-on-disk.",
+          "enum": [ "stdout", "file" ]
+        }
+      }
+    },
+    "DecryptedRow": {
+      "type": "object",
+      "required": [
+        "table",
+        "primary_key",
+        "column_decrypts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "table": {
+          "description": "Logical table name. For v1.0 the supported tables are security-service-owned (security_keys.deks, security_keys.jwt_signing_keys, future encrypted state).",
+          "type": "string",
+          "maxLength": 128
+        },
+        "primary_key": {
+          "description": "Stringified primary key of the decrypted row.",
+          "type": "string",
+          "maxLength": 256
+        },
+        "dek_handle_hex": {
+          "description": "Hex DEK handle used to decrypt this row, when applicable (e.g. wrapped_dek_bytes). Null for DEK metadata lookups that do not unwrap anything.",
+          "type": [ "string", "null" ],
+          "pattern": "^[0-9a-fA-F]+$",
+          "maxLength": 64
+        },
+        "key_handle": {
+          "description": "Opaque key handle (kid) when the row is a JWT signing key (security_keys.jwt_signing_keys).",
+          "type": [ "string", "null" ],
+          "maxLength": 128
+        },
+        "column_decrypts": {
+          "description": "Decrypted column name -> decrypted plaintext value. Each value is the result of unwrap/decrypt against the security service's local KEK material. Values are intentionally typed `string` — binary outputs (e.g. raw DEK bytes) are base64-encoded by the CLI before insertion. Empty object in --dry-run.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    }
+  }
+}
