@@ -498,6 +498,8 @@ class ObservabilityRoutesTest {
         ): AuditLogQueryPort.SearchResult {
             return AuditLogQueryPort.SearchResult(rows = rows, totalCount = rows.size.toLong())
         }
+
+        override suspend fun findById(id: Long): AuditLogQueryPort.Row? = rows.firstOrNull { it.id == id }
     }
 
     private class RecordingAuditLog : AuditLogPort {

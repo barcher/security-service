@@ -158,6 +158,8 @@ class SearchAuditEventsObservationUseCaseTest {
             page: Int,
             size: Int,
         ): AuditLogQueryPort.SearchResult = result
+
+        override suspend fun findById(id: Long): AuditLogQueryPort.Row? = null
     }
 
     private class SpyingQuery(result: AuditLogQueryPort.SearchResult) : StubQuery(result) {

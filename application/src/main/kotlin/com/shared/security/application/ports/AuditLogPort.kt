@@ -135,4 +135,11 @@ object AuditEventType {
     const val OBSERVER_FORBIDDEN = "OBSERVER_FORBIDDEN"
     const val OBSERVABILITY_RATE_LIMIT_EXCEEDED = "OBSERVABILITY_RATE_LIMIT_EXCEEDED"
     const val OBSERVABILITY_ERROR = "OBSERVABILITY_ERROR"
+
+    // Operator decrypt CLI (Stream M — SKS-M09). Emitted by
+    // security-service/tools/decrypt-cli/ BEFORE any unwrap call. Per
+    // CLAUDE.md rule 26 + feedback_operator_decrypt_cli_single_sided.md
+    // this is the only OPERATOR_DECRYPT_RUN audit constant; the monolith
+    // does not host a sibling CLI and therefore does not emit this event.
+    const val OPERATOR_DECRYPT_RUN = "OPERATOR_DECRYPT_RUN"
 }

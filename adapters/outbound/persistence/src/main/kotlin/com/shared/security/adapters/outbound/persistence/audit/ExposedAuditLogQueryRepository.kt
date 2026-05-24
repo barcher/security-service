@@ -97,6 +97,17 @@ class ExposedAuditLogQueryRepository(
         return predicate
     }
 
+    override suspend fun findById(id: Long): AuditLogQueryPort.Row? =
+        withContext(Dispatchers.IO) {
+            transaction(database) {
+                AuditEventsTable.selectAll()
+                    .where { AuditEventsTable.id eq id }
+                    .limit(1)
+                    .firstOrNull()
+                    ?.toQueryRow()
+            }
+        }
+
     private fun ResultRow.toQueryRow(): AuditLogQueryPort.Row =
         AuditLogQueryPort.Row(
             id = this[AuditEventsTable.id],

@@ -31,6 +31,13 @@ interface AuditLogQueryPort {
         size: Int,
     ): SearchResult
 
+    /**
+     * Stream M (SKS-M11) — single-row lookup by primary key. Used by the operator
+     * decrypt CLI's `--audit-event-id` scope. Returns null when the id does not
+     * exist (operator typo, post-retention sweep, etc.).
+     */
+    suspend fun findById(id: Long): Row?
+
     data class Row(
         val id: Long,
         val occurredAt: Instant,

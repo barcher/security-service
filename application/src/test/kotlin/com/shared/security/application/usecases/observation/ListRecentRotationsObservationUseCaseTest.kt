@@ -110,6 +110,8 @@ class ListRecentRotationsObservationUseCaseTest {
             lastSize = size
             return result
         }
+
+        override suspend fun findById(id: Long): AuditLogQueryPort.Row? = null
     }
 
     private class RecordingAuditLog : AuditLogPort {
