@@ -100,6 +100,7 @@ All values are constants in
 | **JWT lifecycle** (Stream K — K.0) | `JWKS_KEY_GENERATED`, `JWKS_KEY_ACTIVATED`, `JWKS_KEY_QUIESCED`, `JWKS_KEY_RETIRED`, `JWKS_KEY_DELETED`, `JWKS_HEALTH_CHECK_FAILED` |
 | **JWT signing operations** (Stream K — K.0) | `JWT_SIGNED`, `JWT_AUDIENCE_FORBIDDEN`, `JWT_SIGN_FAILED` |
 | **Observability surface** (Stream L — L.0) | `DASHBOARD_OBSERVED`, `OBSERVER_FORBIDDEN`, `OBSERVABILITY_RATE_LIMIT_EXCEEDED`, `OBSERVABILITY_ERROR` |
+| **Operator decrypt CLI** (Stream M — M.1) | `OPERATOR_DECRYPT_RUN` — emitted by `security-service/tools/decrypt-cli/` BEFORE any unwrap. `actor_subject` is the operator subject DN (`CN=workautomations-operator-decrypt-<email-hash>,O=WorkAutomations`); `detail_json` carries the structured invocation envelope. Single-sided per the 2026-05-24 amendment — no monolith-side counterpart. |
 
 ## Retention
 

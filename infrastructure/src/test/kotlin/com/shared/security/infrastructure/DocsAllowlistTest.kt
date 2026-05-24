@@ -107,6 +107,7 @@ class DocsAllowlistTest {
                 "JWT_KEY_LIFECYCLE.md",
                 "JWT_CUTOVER.md",
                 "OBSERVABILITY_API.md",
+                "OPERATOR_DECRYPT_RUNBOOK.md",
             )
     }
 }

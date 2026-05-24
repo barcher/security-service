@@ -167,9 +167,11 @@ private const val SOFTWARE_EXIT = 70
 private const val MILLIS_PER_HOUR = 3_600_000L
 
 /**
- * Runtime DI bundle. `bootProduction()` lives in a separate file so the CLI's
- * production wiring (JDBC pool, Koin module bindings) can be replaced wholesale
- * by tests that pass a hand-rolled instance.
+ * Runtime DI bundle. `bootProduction()` opens a JDBC pool against the
+ * security-service MySQL using the same env-var conventions as the running
+ * service (`SECURITY_DB_*` + `AUDIT_HMAC_KEY`), so an operator who has access
+ * to the security-service prod env file can launch the CLI without further
+ * config. Tests pass a hand-rolled instance instead.
  */
 data class CliRuntime(
     val auditLog: AuditLogPort,
@@ -186,13 +188,7 @@ data class CliRuntime(
     val output: OperatorDecryptOutput = OperatorDecryptOutput(stdout, stderr)
 
     companion object {
-        fun bootProduction(): CliRuntime {
-            error(
-                "CliRuntime.bootProduction() not yet wired in M.1 — operator runtime DI " +
-                    "graph (JDBC pool against security-service MySQL + Koin module) lands " +
-                    "in M.2 (SKS-M18). For now, use unit tests with a hand-rolled CliRuntime.",
-            )
-        }
+        fun bootProduction(): CliRuntime = ProductionCliRuntime.boot()
     }
 }
 

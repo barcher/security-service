@@ -24,6 +24,7 @@ allowlist fails CI.
 | `JWT_KEY_LIFECYCLE.md` | ✅ written | Stream K K.0 | State machine + Quartz job catalog for `jwt_signing_keys`. Singleton-ACTIVE invariant, PRIOR/QUIESCED grace windows, default TTLs + retention rationale, operator CLI invocations. |
 | `JWT_CUTOVER.md` | ✅ written | Stream K K.2 + K.3 | Operator playbook for monolith HS256 → security-service ES256 migration. Pre-flight checklist, phase-by-phase rollout, Grafana gates for K.3 deletion, failure-mode recovery. |
 | `OBSERVABILITY_API.md` | ✅ written | Stream L L.0 | Wire contract for the 5 GETs under `/v1/observability/`, dashboard-observer mTLS allow-list, rate-limit configuration, audit-event semantics, threat-model, sample mTLS curl invocations. |
+| `OPERATOR_DECRYPT_RUNBOOK.md` | ✅ written | Stream M M.2 | Operator-facing runbook for the security-service-only operator decrypt CLI (`tools/decrypt-cli/`). Cert minting + allow-list setup, usage by key handle / audit event id, output-format catalog, audit-trail semantics, exit codes, rehearsal flow, troubleshooting. Single-sided per the 2026-05-24 amendment — no monolith-side sibling CLI. |
 
 Anything outside this list belongs in the top-level [`README.md`](../README.md), in
 [`.env.example`](../.env.example), or in the source itself as a KDoc block. No
