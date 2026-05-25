@@ -1,0 +1,101 @@
+# Phase: post-Phase-15 K3.2 (SKS-K3S-10) — security-mysql StatefulSet.
+#
+# Per `scaffold/docs/proposals/k3s_deployment.md` §3.2:
+#   - One MySQL StatefulSet per service namespace (no shared DB across services).
+#   - PersistentVolumeClaim via `local-path-provisioner` (k3s default) at the
+#     single-node baseline. Longhorn migration is the multi-node-prod path; not
+#     this scaffold's concern.
+#   - 5 GiB baseline (proposal §3.2 storage table).
+#   - Headless Service so workload pod resolves `security-mysql.security.svc.cluster.local`.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: security-mysql
+  namespace: security
+spec:
+  serviceName: security-mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: security-mysql
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: security-mysql
+        # Backup CronJob is uninjected (egress to R2 outside the mesh). The MySQL
+        # pod itself stays injected in prod overlays for east-west mTLS to the
+        # workload pod via Linkerd.
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          args:
+            - --transaction-isolation=READ-COMMITTED
+            - --binlog-format=ROW
+            - --default-authentication-plugin=mysql_native_password
+          env:
+            - name: MYSQL_DATABASE
+              value: security_keys
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: security-db-credentials
+                  key: user
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: security-db-credentials
+                  key: password
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: security-db-credentials
+                  key: root-password
+          ports:
+            - name: mysql
+              containerPort: 3306
+              protocol: TCP
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          readinessProbe:
+            tcpSocket:
+              port: mysql
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: mysql
+            initialDelaySeconds: 60
+            periodSeconds: 30
+  volumeClaimTemplates:
+    - metadata:
+        name: mysql-data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 5Gi
+---
+# Headless Service — gives the StatefulSet pod a stable DNS name.
+apiVersion: v1
+kind: Service
+metadata:
+  name: security-mysql
+  namespace: security
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: security-mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql

@@ -1,0 +1,114 @@
+# Phase: post-Phase-15 K3.2 (SKS-K3S-10) — NetworkPolicies for the security namespace.
+#
+# Per `scaffold/docs/proposals/k3s_deployment.md` §3.2:
+#   - Default-deny in the namespace.
+#   - security-app receives traffic only from app + financial namespaces (workload
+#     pods), and from operator workstations via the security-ops.* SNI passthrough
+#     route (not modelled here — that's a Traefik concern).
+#   - security-mysql only accepts from security-app + the backup CronJob.
+#   - security-app egress: external R2 (for SHIP-03 audit shipper, future), DNS,
+#     security-mysql in-namespace.
+
+# Default-deny baseline. Selector matches all pods; both ingress + egress empty.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: security
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# security-app accepts ingress from app + financial namespaces' workload pods only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: security-app-allow-monolith-and-financial
+  namespace: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: security-app
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: app
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: monolith
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: financial-app
+      ports:
+        - protocol: TCP
+          port: 8443
+---
+# security-app egress: DNS, in-namespace MySQL, external R2 (HTTPS).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: security-app-egress
+  namespace: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: security-app
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: security-mysql
+      ports:
+        - protocol: TCP
+          port: 3306
+    # External egress (R2 cold storage, JWKS, Anthropic if used). Operator narrows
+    # the CIDR per their R2 endpoint at apply-time.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# security-mysql accepts only from security-app + the backup CronJob.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: security-mysql-allow-security-app-and-backup
+  namespace: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: security-mysql
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: security-app
+        - podSelector:
+            matchLabels:
+              batch.kubernetes.io/job-name: security-mysql-backup
+      ports:
+        - protocol: TCP
+          port: 3306

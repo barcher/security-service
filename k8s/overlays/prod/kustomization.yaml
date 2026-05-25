@@ -1,0 +1,28 @@
+# Phase: post-Phase-15 K3.2 (SKS-K3S-11) — security-service prod overlay.
+#
+# Adds:
+#   - linkerd.io/inject annotation on the namespace (workload pods + MySQL get the
+#     sidecar; backup CronJob already opts out at pod-template level).
+#   - Pinned semver image tag (operator bumps per-release).
+#   - PKCS12 keystore Secret for the security-ops.* SNI passthrough lane
+#     (proposal §4.2 cross-cutting note). The Secret manifest is SOPS-encrypted
+#     and lives in workAutomations/ops/ (Flux applies it cluster-side); this
+#     overlay only mounts the resulting Secret.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - target:
+      kind: Namespace
+      name: security
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          linkerd.io/inject: enabled
+images:
+  - name: ghcr.io/REPLACE-ORG/security-app
+    newTag: 0.1.0 # operator bumps per-release
+  - name: ghcr.io/REPLACE-ORG/mysql-r2-backup
+    newTag: 0.1.0

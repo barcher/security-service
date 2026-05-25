@@ -1,0 +1,13 @@
+# Phase: post-Phase-15 K3.2 (SKS-K3S-11) — security-service dev overlay.
+#
+# Differences from prod:
+#   - No Linkerd inject annotation on the namespace.
+#   - Image tag pinned to a known-good dev build.
+#   - SECURITY_SCHEDULER_ENABLED stays `false` (matches base).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/REPLACE-ORG/security-app
+    newTag: dev-latest

@@ -1,0 +1,15 @@
+# Phase: post-Phase-15 K3.2 (SKS-K3S-10) — security namespace.
+#
+# Per `scaffold/docs/proposals/k3s_deployment.md` §3.2:
+#   - Three namespaces (app, security, financial) each contain ONE workload Deployment
+#     + ONE MySQL StatefulSet.
+#   - The prod overlay adds `linkerd.io/inject: enabled` so workload pods receive the
+#     sidecar; this base manifest deliberately omits the annotation so dev pods are
+#     not auto-injected.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: security
+  labels:
+    app.kubernetes.io/part-of: workautomations
+    workautomations.io/service: security

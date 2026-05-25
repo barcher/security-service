@@ -1,0 +1,73 @@
+# Phase: post-Phase-15 K3.2 (SKS-K3S-10) — security-mysql backup CronJob.
+#
+# Per `scaffold/docs/proposals/k3s_deployment.md` §3.2:
+#   - Daily 02:00 UTC mysqldump → encrypt with security-backup-key → upload to R2.
+#   - `linkerd.io/inject: disabled` so the pod can egress to R2 outside the mesh
+#     (Linkerd's outbound policy doesn't help here; adds latency + log noise).
+#   - Restore-validation is a separate monthly CronJob (not in this base scaffold;
+#     operator adds when the disaster-recovery rehearsal cadence is set).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: security-mysql-backup
+  namespace: security
+  annotations:
+    linkerd.io/inject: disabled
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 7
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          annotations:
+            linkerd.io/inject: disabled
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: mysql-backup
+              image: ghcr.io/REPLACE-ORG/mysql-r2-backup:0.0.0
+              env:
+                - name: MYSQL_HOST
+                  value: security-mysql.security.svc.cluster.local
+                - name: MYSQL_DATABASE
+                  value: security_keys
+                - name: MYSQL_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: security-db-credentials
+                      key: user
+                - name: MYSQL_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: security-db-credentials
+                      key: password
+                - name: R2_ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      name: security-r2-backup
+                      key: endpoint
+                - name: R2_BUCKET
+                  value: workautomations-backups
+                - name: R2_PREFIX
+                  value: security
+                - name: R2_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: security-r2-backup
+                      key: access-key-id
+                - name: R2_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: security-r2-backup
+                      key: secret-access-key
+                - name: BACKUP_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: security-audit-keys
+                      key: backup-key
+          imagePullSecrets:
+            - name: ghcr-secret

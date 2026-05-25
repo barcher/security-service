@@ -1,0 +1,139 @@
+# Phase: post-Phase-15 K3.2 (SKS-K3S-10) — security-app workload.
+#
+# Per `scaffold/docs/proposals/k3s_deployment.md` §3.2 + §4.2:
+#   - Single replica baseline (`replicas: 1`). Multi-replica requires a shared
+#     audit-chain lock + shared rate-limit bucket; both are post-K3S-pilot work.
+#   - Image tag pinned via Kustomize image transformer in each overlay (NEVER `:latest`).
+#   - Env vars sourced from per-overlay Secret + ConfigMap. SECURITY_DB_*,
+#     AUDIT_HMAC_KEY, BACKUP_KEY come from SOPS-encrypted Secret.
+#   - SECURITY_SCHEDULER_ENABLED defaults to `false` (per the SHIP-01..06 runbook;
+#     operator flips to `true` only after SHIP-03/04 wire real R2 adapters).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-app
+  namespace: security
+  labels:
+    app.kubernetes.io/name: security-app
+    app.kubernetes.io/part-of: workautomations
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: security-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: security-app
+    spec:
+      serviceAccountName: security-app
+      automountServiceAccountToken: true
+      containers:
+        - name: security-app
+          # Tag overridden per overlay; never use :latest.
+          image: ghcr.io/REPLACE-ORG/security-app:0.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8443
+              protocol: TCP
+            - name: metrics
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: SECURITY_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: security-db-credentials
+                  key: jdbc-url
+            - name: SECURITY_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: security-db-credentials
+                  key: user
+            - name: SECURITY_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: security-db-credentials
+                  key: password
+            - name: AUDIT_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: security-audit-keys
+                  key: audit-hmac-key
+            - name: BACKUP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: security-audit-keys
+                  key: backup-key
+            - name: SECURITY_SCHEDULER_ENABLED
+              value: "false"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+              scheme: HTTPS
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          volumeMounts:
+            - name: tls-keystore
+              mountPath: /etc/security/tls
+              readOnly: true
+            - name: kek-bootstrap
+              mountPath: /etc/security/kek
+              readOnly: true
+      imagePullSecrets:
+        - name: ghcr-secret
+      volumes:
+        - name: tls-keystore
+          secret:
+            secretName: security-app-tls-keystore
+        - name: kek-bootstrap
+          secret:
+            secretName: security-kek-bootstrap
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: security-app
+  namespace: security
+  labels:
+    app.kubernetes.io/name: security-app
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: security-app
+  ports:
+    - name: http
+      port: 8443
+      targetPort: http
+      protocol: TCP
+    - name: metrics
+      port: 8081
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: security-app
+  namespace: security
