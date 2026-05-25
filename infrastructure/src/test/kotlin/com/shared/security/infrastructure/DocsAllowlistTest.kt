@@ -108,6 +108,7 @@ class DocsAllowlistTest {
                 "JWT_CUTOVER.md",
                 "OBSERVABILITY_API.md",
                 "OPERATOR_DECRYPT_RUNBOOK.md",
+                "AUDIT_SHIPPER_RUNBOOK.md",
             )
     }
 }

@@ -11,8 +11,10 @@ import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.greaterEq
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.less
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.lessEq
 import org.jetbrains.exposed.sql.and
+import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -121,6 +123,66 @@ class ExposedAuditLogRepository(
                 .firstOrNull()
         return latest?.get(AuditEventsTable.rowHmac)
     }
+
+    /**
+     * Stream C follow-up SHIP-02 — read a contiguous range of audit rows in `[fromId, toId]`
+     * (inclusive) and serialise to the `AuditBatch` shape the shipper use case consumes.
+     * Returns null when the range contains no rows. The canonical byte serialisation is
+     * `id ‖ event_type ‖ row_hmac` per row, concatenated; the receiving side replays the
+     * row_hmac chain to confirm integrity.
+     */
+    suspend fun readShipBatch(
+        fromId: Long,
+        toId: Long,
+        maxRows: Int,
+    ): com.shared.security.application.ports.AuditBatch? =
+        withContext(Dispatchers.IO) {
+            transaction(database) {
+                val rows =
+                    AuditEventsTable
+                        .selectAll()
+                        .where { (AuditEventsTable.id greaterEq fromId) and (AuditEventsTable.id lessEq toId) }
+                        .orderBy(AuditEventsTable.id to SortOrder.ASC)
+                        .limit(maxRows)
+                        .toList()
+                if (rows.isEmpty()) return@transaction null
+                val first = rows.first()[AuditEventsTable.id]
+                val last = rows.last()[AuditEventsTable.id]
+                val sink = java.io.ByteArrayOutputStream()
+                for (row in rows) {
+                    val id = row[AuditEventsTable.id]
+                    val eventType = row[AuditEventsTable.eventType].toByteArray(Charsets.UTF_8)
+                    val rowHmac = row[AuditEventsTable.rowHmac]
+                    sink.write(java.nio.ByteBuffer.allocate(Long.SIZE_BYTES).putLong(id).array())
+                    sink.write(eventType)
+                    sink.write(rowHmac)
+                }
+                com.shared.security.application.ports.AuditBatch(
+                    batchId = "audit-batch-$first-$last",
+                    fromRowId = first,
+                    toRowId = last,
+                    bytesCanonical = sink.toByteArray(),
+                )
+            }
+        }
+
+    /**
+     * Stream C follow-up SHIP-02 — bounded deletion for `AuditRetentionJob`. Deletes rows
+     * whose `occurred_at < cutoff` AND whose `id <= maxId`. The maxId bound prevents the
+     * retention job from deleting rows the shipper has not yet processed. Returns the row
+     * count deleted.
+     */
+    suspend fun deleteOlderThan(
+        cutoff: kotlinx.datetime.Instant,
+        maxId: Long,
+    ): Long =
+        withContext(Dispatchers.IO) {
+            transaction(database) {
+                AuditEventsTable.deleteWhere {
+                    (AuditEventsTable.occurredAt less cutoff) and (AuditEventsTable.id lessEq maxId)
+                }.toLong()
+            }
+        }
 
     private fun org.jetbrains.exposed.sql.ResultRow.toAuditEvent(): AuditEvent =
         AuditEvent(

@@ -30,6 +30,7 @@ import com.shared.security.infrastructure.di.securityServiceModule
 import com.shared.security.infrastructure.tls.MtlsConfig
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationStopping
 import io.ktor.server.application.install
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.applicationEnvironment
@@ -282,6 +283,18 @@ fun Application.securityModule() {
         RateLimitConfig.ENV_REFILL,
     )
     installMtlsAuth(extractor = extractor, auditLog = auditLog)
+
+    // Stream C follow-up SHIP-02 — start the SecurityScheduler. The .start() call is a
+    // no-op when SECURITY_SCHEDULER_ENABLED=false (the default for safety — operator opts
+    // in once SHIP-03/SHIP-04 wire real cold-storage + backup-verify adapters). The
+    // .stop() call is registered on ApplicationStopping so graceful shutdown waits for
+    // in-flight jobs (Quartz `shutdown(true)`).
+    val securityScheduler by inject<com.shared.security.adapters.inbound.scheduler.SecurityScheduler>()
+    securityScheduler.start()
+    monitor.subscribe(ApplicationStopping) {
+        runCatching { securityScheduler.stop() }
+            .onFailure { logger.warn("SecurityScheduler.stop() failed during shutdown", it) }
+    }
 
     routing {
         installHealthRoute()

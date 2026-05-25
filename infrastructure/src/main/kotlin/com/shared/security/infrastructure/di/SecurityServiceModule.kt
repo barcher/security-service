@@ -222,7 +222,170 @@ val securityServiceModule =
         single {
             com.shared.security.application.usecases.observation.ListRecentRotationsObservationUseCase(get(), get())
         }
+
+        // ── Stream C follow-up SHIP-01..02 — audit-shipper, retention, kek-backup wiring ───
+        //
+        // NoOp adapters until SHIP-03 + SHIP-04 land real R2/S3 implementations. The use cases
+        // exercise the full path; only the bytes-leaving-the-process step is stubbed.
+        single<com.shared.security.application.ports.ColdStoragePort> {
+            com.shared.security.infrastructure.audit.NoOpColdStorageAdapter()
+        }
+        single<com.shared.security.application.ports.KekBackupVerifierPort> {
+            com.shared.security.infrastructure.kek.NoOpKekBackupVerifier()
+        }
+
+        // Audit-shipped-checkpoint repo — backs both the shipper (last-shipped-id) and the
+        // retention job (delete-bound). Requires SecurityDatabase.
+        single {
+            val db =
+                requireNotNull(getOrNull<SecurityDatabase>()) {
+                    "Audit shipper + retention require SECURITY_DB_ENABLED=true"
+                }
+            com.shared.security.adapters.outbound.persistence.audit.AuditShippedCheckpointRepository(db.database)
+        }
+
+        // RunKekHealthCheckUseCase — depends on CryptoKeyServicePort + AuditLogPort.
+        single { com.shared.security.application.usecases.RunKekHealthCheckUseCase(get(), get()) }
+
+        // RunKekPriorTtlUseCase — depends on KekRepository + DekRepository + AuditLogPort + Duration.
+        single {
+            com.shared.security.application.usecases.RunKekPriorTtlUseCase(
+                kekRepository = get(),
+                dekRepository = get(),
+                auditLog = get(),
+                quiesceWindow =
+                    kotlin.time.Duration.parse(
+                        System.getenv("SECURITY_KEK_QUIESCE_WINDOW") ?: "24h",
+                    ),
+            )
+        }
+
+        // DekRepository (needed by KekPriorTtl + DekRotation use cases).
+        single<com.shared.security.application.ports.DekRepository> {
+            val db =
+                requireNotNull(getOrNull<SecurityDatabase>()) {
+                    "DekRepository requires SECURITY_DB_ENABLED=true"
+                }
+            com.shared.security.adapters.outbound.persistence.ExposedDekRepository(db.database)
+        }
+
+        // RunDekRotationUseCase — depends on KekRepository + DekRepository + CryptoKeyServicePort
+        // + activeKekPublicKey provider + AuditLogPort.
+        single {
+            com.shared.security.application.usecases.RunDekRotationUseCase(
+                kekRepository = get(),
+                dekRepository = get(),
+                crypto = get(),
+                activeKekPublicKey = {
+                    // SHIP-02 placeholder. The DEK rotation use case needs the current active
+                    // KEK's raw public-key bytes to call `rewrapDekForNewKek`. KekRecord stores
+                    // only metadata (fingerprint, status, timestamps) and CryptoKeyServicePort
+                    // exposes only `getPublicKeyFingerprint()`. A follow-up ticket adds
+                    // `getActiveKekPublicKey(): ByteArray?` to CryptoKeyServicePort so the
+                    // adapter (which holds the bytes in-process) can hand them out.
+                    //
+                    // Returning empty bytes here means DekRotationJob will fail gracefully —
+                    // acceptable for the SHIP-02 wiring since SECURITY_SCHEDULER_ENABLED
+                    // defaults to false; the operator turns the scheduler on only after the
+                    // follow-up ticket wires this closure to a real provider.
+                    ByteArray(0)
+                },
+                auditLog = get(),
+            )
+        }
+
+        // RunAuditLogShipperUseCase — wires the closure-style deps to the
+        // AuditShippedCheckpointRepository + ExposedAuditLogRepository.
+        single {
+            val auditLogRepo =
+                get<AuditLogPort>() as
+                    com.shared.security.adapters.outbound.persistence.audit.ExposedAuditLogRepository
+            val checkpointRepo =
+                get<com.shared.security.adapters.outbound.persistence.audit.AuditShippedCheckpointRepository>()
+            val coldStorage = get<com.shared.security.application.ports.ColdStoragePort>()
+            com.shared.security.application.usecases.RunAuditLogShipperUseCase(
+                chainVerifier = { fromId, toId ->
+                    when (val result = auditLogRepo.verifyChain(fromId, toId)) {
+                        is com.shared.security.adapters.outbound.persistence.audit.ExposedAuditLogRepository
+                            .VerifyResult.OK,
+                        ->
+                            com.shared.security.application.usecases.RunAuditLogShipperUseCase
+                                .ChainVerification.Ok
+                        is com.shared.security.adapters.outbound.persistence.audit.ExposedAuditLogRepository
+                            .VerifyResult.EMPTY,
+                        ->
+                            com.shared.security.application.usecases.RunAuditLogShipperUseCase
+                                .ChainVerification.Empty
+                        is com.shared.security.adapters.outbound.persistence.audit.ExposedAuditLogRepository
+                            .VerifyResult.BrokenAt,
+                        ->
+                            com.shared.security.application.usecases.RunAuditLogShipperUseCase
+                                .ChainVerification.Broken(result.firstBadId)
+                    }
+                },
+                batchReader = { fromId, toId ->
+                    auditLogRepo.readShipBatch(fromId, toId, AUDIT_SHIP_BATCH_SIZE)
+                        ?: com.shared.security.application.ports.AuditBatch(
+                            batchId = "empty",
+                            fromRowId = fromId,
+                            toRowId = fromId,
+                            bytesCanonical = ByteArray(0),
+                        )
+                },
+                coldStorage = coldStorage,
+                auditLog = get(),
+                lastShippedIdProvider = { checkpointRepo.load() },
+                lastShippedIdSaver = { value -> checkpointRepo.save(value) },
+            )
+        }
+
+        // RunAuditRetentionUseCase — wires the deleter + last-shipped-id-provider closures
+        // to the same backing stores. Retention duration honours FedRAMP AU-11 floor (7 years
+        // = 2557 days) by default; operator can shorten via env var (loaded inline so the
+        // env-read is visible).
+        single {
+            val auditLogRepo =
+                get<AuditLogPort>() as
+                    com.shared.security.adapters.outbound.persistence.audit.ExposedAuditLogRepository
+            val checkpointRepo =
+                get<com.shared.security.adapters.outbound.persistence.audit.AuditShippedCheckpointRepository>()
+            val retentionDays =
+                System.getenv("SECURITY_AUDIT_RETENTION_DAYS")?.toLongOrNull()
+                    ?: DEFAULT_RETENTION_DAYS
+            com.shared.security.application.usecases.RunAuditRetentionUseCase(
+                deleter = { cutoff, maxId -> auditLogRepo.deleteOlderThan(cutoff, maxId) },
+                lastShippedIdProvider = { checkpointRepo.load() },
+                auditLog = get(),
+                retentionDuration = kotlin.time.Duration.parse("${retentionDays}d"),
+            )
+        }
+
+        // RunKekBackupVerifyUseCase — depends on KekBackupVerifierPort + AuditLogPort.
+        single { com.shared.security.application.usecases.RunKekBackupVerifyUseCase(get(), get()) }
+
+        // SchedulerConfig — env-driven; SECURITY_SCHEDULER_ENABLED gates the whole subsystem.
+        single { com.shared.security.adapters.inbound.scheduler.SchedulerConfig.fromEnv() }
+
+        // SecurityScheduler — composition of all 6 use cases. NOT started here — the
+        // composition root (Application.kt) calls .start() after Koin boot completes.
+        single {
+            com.shared.security.adapters.inbound.scheduler.SecurityScheduler(
+                config = get(),
+                useCases =
+                    com.shared.security.adapters.inbound.scheduler.SecurityScheduler.UseCases(
+                        kekHealth = get(),
+                        kekPriorTtl = get(),
+                        dekRotation = get(),
+                        auditShipper = get(),
+                        auditRetention = get(),
+                        kekBackupVerify = get(),
+                    ),
+            )
+        }
     }
+
+private const val AUDIT_SHIP_BATCH_SIZE: Int = 1000
+private const val DEFAULT_RETENTION_DAYS: Long = 2557L // 7 years — FedRAMP AU-11 floor
 
 private const val JWT_PRIOR_TTL_HOURS: Long = 24L
 private const val JWT_QUIESCED_RETENTION_HOURS: Long = 24L
