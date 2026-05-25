@@ -1,0 +1,91 @@
+# Phase: post-Phase-15 PI.5 (INGRESS-33..38) — Linkerd Server + ServerAuthorization
+# for the security-app workload.
+#
+# Per scaffold/docs/proposals/production_ingress.md §5:
+#   - Lane L1a: monolith → security-app /v1/{dek,jwt}/* (operational).
+#   - Lane L1b: monolith → security-app /v1/observability/* (dashboard observer).
+#   - Lane L1c: financial-app → security-app /v1/dek/* (operational).
+#   - All other east-west connections to security-app are DENIED at the mesh layer.
+#
+# The Server CRD names the port; the ServerAuthorization CRDs name which
+# SPIFFE identities can connect. Linkerd identity for a workload pod is
+# `<service-account>.<namespace>.serviceaccount.identity.linkerd.cluster.local`.
+apiVersion: policy.linkerd.io/v1beta3
+kind: Server
+metadata:
+  name: security-app-http
+  namespace: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: security-app
+  port: http
+  proxyProtocol: HTTP/2
+---
+# Lane L1a + L1c — operational east-west to /v1/dek/* + /v1/jwt/* + /v1/health.
+apiVersion: policy.linkerd.io/v1beta3
+kind: AuthorizationPolicy
+metadata:
+  name: security-app-operational
+  namespace: security
+spec:
+  targetRef:
+    group: policy.linkerd.io
+    kind: Server
+    name: security-app-http
+  requiredAuthenticationRefs:
+    - group: policy.linkerd.io
+      kind: MeshTLSAuthentication
+      name: security-app-operational-clients
+---
+apiVersion: policy.linkerd.io/v1beta3
+kind: MeshTLSAuthentication
+metadata:
+  name: security-app-operational-clients
+  namespace: security
+spec:
+  identities:
+    - monolith.app.serviceaccount.identity.linkerd.cluster.local
+    - financial-app.financial.serviceaccount.identity.linkerd.cluster.local
+---
+# Prometheus scrape — separate identity so the metrics endpoint can be opened
+# to monitoring/ without opening the data plane.
+apiVersion: policy.linkerd.io/v1beta3
+kind: Server
+metadata:
+  name: security-app-metrics
+  namespace: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: security-app
+  port: metrics
+  proxyProtocol: HTTP/2
+---
+apiVersion: policy.linkerd.io/v1beta3
+kind: AuthorizationPolicy
+metadata:
+  name: security-app-metrics-prometheus
+  namespace: security
+spec:
+  targetRef:
+    group: policy.linkerd.io
+    kind: Server
+    name: security-app-metrics
+  requiredAuthenticationRefs:
+    - group: policy.linkerd.io
+      kind: MeshTLSAuthentication
+      name: security-app-metrics-clients
+---
+apiVersion: policy.linkerd.io/v1beta3
+kind: MeshTLSAuthentication
+metadata:
+  name: security-app-metrics-clients
+  namespace: security
+spec:
+  identities:
+    - prometheus-app.monitoring.serviceaccount.identity.linkerd.cluster.local
+---
+# Default deny: any port not covered by a Server + AuthorizationPolicy above
+# is closed at the mesh layer. The Linkerd `linkerd-policy` controller honours
+# this when at least one Server matches the pod.

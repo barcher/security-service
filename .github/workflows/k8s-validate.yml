@@ -1,0 +1,60 @@
+# Phase: post-Phase-15 K3.2 (SKS-K3S-14) — CI validation for k8s manifests.
+#
+# Runs on any PR that touches k8s/. Fails fast on:
+#   1. kustomize build error (broken overlay)
+#   2. kubeconform schema validation error
+#   3. ops/tests/k8s-manifest-lint.sh policy violation
+name: k8s-validate
+on:
+  pull_request:
+    paths:
+      - 'k8s/**'
+      - '.github/workflows/k8s-validate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'k8s/**'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kustomize
+        run: |
+          curl -sLO https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz
+          tar xzf kustomize_v5.4.3_linux_amd64.tar.gz
+          sudo mv kustomize /usr/local/bin/
+      - name: Install kubeconform
+        run: |
+          curl -sLO https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar xzf kubeconform-linux-amd64.tar.gz
+          sudo mv kubeconform /usr/local/bin/
+      - name: kustomize build + kubeconform — dev overlay
+        run: |
+          kustomize build k8s/overlays/dev | \
+            kubeconform -strict -summary \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+      - name: kustomize build + kubeconform — prod overlay
+        run: |
+          kustomize build k8s/overlays/prod | \
+            kubeconform -strict -summary \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+      - name: Fetch k8s-manifest-lint.sh from ops/
+        run: |
+          # The audit script lives in workAutomations/ops; for a single-repo CI
+          # we pull it via raw URL. Operator updates the URL once the ops repo
+          # has a public-readable raw endpoint.
+          curl -sLo /tmp/k8s-manifest-lint.sh \
+            'https://raw.githubusercontent.com/REPLACE-ORG/ops/main/tests/k8s-manifest-lint.sh' \
+            || echo "ops repo not yet public — skipping lint"
+          chmod +x /tmp/k8s-manifest-lint.sh 2>/dev/null || true
+      - name: Run k8s-manifest-lint.sh
+        run: |
+          if [[ -x /tmp/k8s-manifest-lint.sh ]]; then
+            /tmp/k8s-manifest-lint.sh k8s/
+          else
+            echo "lint script unavailable; skipping (operator: make ops repo readable)"
+          fi

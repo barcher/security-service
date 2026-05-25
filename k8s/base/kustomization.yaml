@@ -8,6 +8,7 @@ resources:
   - security-mysql-statefulset.yaml
   - security-mysql-backup-cronjob.yaml
   - network-policies.yaml
+  - linkerd-server-authorization.yaml
 commonLabels:
   app.kubernetes.io/part-of: workautomations
   workautomations.io/service: security
