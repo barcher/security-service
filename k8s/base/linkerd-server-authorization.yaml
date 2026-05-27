@@ -13,16 +13,33 @@
 apiVersion: policy.linkerd.io/v1beta3
 kind: Server
 metadata:
-  name: security-app-http
+  name: security-app-mtls
   namespace: security
 spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: security-app
-  port: http
+  port: https-mtls
   proxyProtocol: HTTP/2
 ---
-# Lane L1a + L1c — operational east-west to /v1/dek/* + /v1/jwt/* + /v1/health.
+# Public-lane Server — the 8442 port that serves /v1/jwks + /v1/health to anonymous
+# consumers. East-west clients can hit it via any in-cluster Service connection; the
+# AuthorizationPolicy below opens it to the same SPIFFE identities as the mTLS lane
+# (the JWKS cache lives in the monolith + financial-app). Operators consuming JWKS
+# externally come in via Traefik, NOT through the mesh — they don't need a SPIFFE id.
+apiVersion: policy.linkerd.io/v1beta3
+kind: Server
+metadata:
+  name: security-app-public
+  namespace: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: security-app
+  port: https-public
+  proxyProtocol: HTTP/2
+---
+# Lane L1a + L1c — operational east-west to /v1/dek/* + /v1/jwt/sign + observability.
 apiVersion: policy.linkerd.io/v1beta3
 kind: AuthorizationPolicy
 metadata:
@@ -32,7 +49,25 @@ spec:
   targetRef:
     group: policy.linkerd.io
     kind: Server
-    name: security-app-http
+    name: security-app-mtls
+  requiredAuthenticationRefs:
+    - group: policy.linkerd.io
+      kind: MeshTLSAuthentication
+      name: security-app-operational-clients
+---
+# Public lane — same consuming identities (monolith, financial-app). The route-level
+# allow-list inside the security-service ensures only /v1/jwks + /v1/health are
+# reachable here regardless of caller.
+apiVersion: policy.linkerd.io/v1beta3
+kind: AuthorizationPolicy
+metadata:
+  name: security-app-public
+  namespace: security
+spec:
+  targetRef:
+    group: policy.linkerd.io
+    kind: Server
+    name: security-app-public
   requiredAuthenticationRefs:
     - group: policy.linkerd.io
       kind: MeshTLSAuthentication

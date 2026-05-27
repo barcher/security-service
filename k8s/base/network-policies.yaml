@@ -45,8 +45,14 @@ spec:
             matchLabels:
               app.kubernetes.io/name: financial-app
       ports:
+        # 8443: mTLS-required lane.
         - protocol: TCP
           port: 8443
+        # 8442: public lane (/v1/jwks + /v1/health). Same caller set; the public lane
+        # is reachable without an mTLS cert but still IP-restricted to the two
+        # consuming namespaces by this policy.
+        - protocol: TCP
+          port: 8442
 ---
 # security-app egress: DNS, in-namespace MySQL, external R2 (HTTPS).
 apiVersion: networking.k8s.io/v1

@@ -39,8 +39,14 @@ spec:
           image: ghcr.io/REPLACE-ORG/security-app:0.0.0
           imagePullPolicy: IfNotPresent
           ports:
-            - name: http
+            # mTLS-required lane: /v1/dek/*, /v1/jwt/sign, /v1/admin/*, /v1/observability/*.
+            - name: https-mtls
               containerPort: 8443
+              protocol: TCP
+            # Public lane (no mTLS): /v1/jwks + /v1/health only. Anonymous handshakes
+            # succeed; MtlsAuthPlugin's allow-list ensures every other route 401s here.
+            - name: https-public
+              containerPort: 8442
               protocol: TCP
             - name: metrics
               containerPort: 8081
@@ -73,6 +79,13 @@ spec:
                   key: backup-key
             - name: SECURITY_SCHEDULER_ENABLED
               value: "false"
+            # Two-connector ports — explicit values for k8s networking visibility.
+            # Defaults in code are the same but spelling them out makes the Service +
+            # NetworkPolicy + Linkerd Server refs trivially traceable.
+            - name: SECURITY_SERVICE_PORT
+              value: "8443"
+            - name: SECURITY_SERVICE_PUBLIC_PORT
+              value: "8442"
           resources:
             requests:
               cpu: 250m
@@ -80,17 +93,21 @@ spec:
             limits:
               cpu: 1000m
               memory: 1Gi
+          # Probes target the public lane (no client cert needed). The kubelet has no
+          # client cert and previously could only reach /v1/health via the now-removed
+          # plaintext fallback; routing probes through the public connector is the
+          # correct long-term path.
           readinessProbe:
             httpGet:
               path: /v1/health
-              port: http
+              port: https-public
               scheme: HTTPS
             initialDelaySeconds: 10
             periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /v1/health
-              port: http
+              port: https-public
               scheme: HTTPS
             initialDelaySeconds: 30
             periodSeconds: 30
@@ -123,9 +140,13 @@ spec:
   selector:
     app.kubernetes.io/name: security-app
   ports:
-    - name: http
+    - name: https-mtls
       port: 8443
-      targetPort: http
+      targetPort: https-mtls
+      protocol: TCP
+    - name: https-public
+      port: 8442
+      targetPort: https-public
       protocol: TCP
     - name: metrics
       port: 8081

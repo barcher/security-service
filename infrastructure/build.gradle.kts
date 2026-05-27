@@ -102,3 +102,34 @@ tasks.register<Test>("integrationTest") {
 tasks.named<JavaExec>("run") {
     workingDir = rootProject.projectDir
 }
+
+// `runFresh` — touch every Kotlin source so its mtime is "now", then clean every
+// module's build outputs + run. The touch is important: some editors (including
+// agentic-tool atomic-rewrite paths) preserve a file's original mtime when they
+// rewrite content, which makes Gradle's incremental compiler think the source is
+// older than the last compiled .class and skip recompilation. Result: "I rebuilt and
+// it still doesn't work" symptoms even after a `clean`. Touching the sources first
+// guarantees they look newer than any cached output.
+tasks.register("touchKotlinSources") {
+    group = "build"
+    description = "Bump mtime on every .kt under src/ so Gradle definitely re-runs the compiler."
+    doLast {
+        rootProject.allprojects.forEach { p ->
+            val srcDir = p.projectDir.resolve("src")
+            if (srcDir.isDirectory) {
+                p.fileTree(srcDir) { include("**/*.kt") }.forEach { it.setLastModified(System.currentTimeMillis()) }
+            }
+        }
+    }
+}
+
+tasks.register("runFresh") {
+    group = "application"
+    description = "Touch sources, clean all modules, then run the security-service. Use when stale build cache is suspected."
+    dependsOn("touchKotlinSources")
+    dependsOn(
+        rootProject.allprojects
+            .mapNotNull { it.tasks.findByName("clean") },
+    )
+    finalizedBy(tasks.named("run"))
+}

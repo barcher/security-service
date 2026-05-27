@@ -268,4 +268,145 @@ class SecurityBoundaryArchTest {
             "S-16 violation — DashboardObserverAllowList is referenced outside the allowed set: $offenders"
         }
     }
+
+    /**
+     * **S-20 — the mTLS-public allow-list passed to `installMtlsAuth` in `Application.kt`
+     * is exactly `{"/v1/jwks", "/v1/health"}`.**
+     *
+     * Every other security-service route MUST be mTLS-gated. Adding a path to the
+     * allow-list weakens an auditor-visible guarantee (FedRAMP AC-3) and updates the
+     * security scorecard's Authentication row — both of which need explicit review.
+     * This source-grep test forces that review by failing CI whenever the literal set
+     * passed to `installMtlsAuth(publicPathPrefixes = …)` drifts from the canonical pair.
+     *
+     * The check is a string-literal inspection (same shape as S-15). It does NOT verify
+     * the routing layer respects the gate — `MtlsAuthPluginTest` covers behavior.
+     */
+    @Test
+    fun `S-20 installMtlsAuth public path allow-list is exactly the two documented routes`() {
+        val expected = setOf("/v1/jwks", "/v1/health")
+        val sourceFile =
+            java.nio.file.Paths.get(
+                "src", "main", "kotlin", "com", "shared", "security", "infrastructure",
+                "Application.kt",
+            )
+        check(java.nio.file.Files.exists(sourceFile)) {
+            "S-20 cannot find Application.kt at $sourceFile (test must run from infrastructure/)"
+        }
+        val text = java.nio.file.Files.readString(sourceFile)
+        // Match the publicPathPrefixes argument value in the installMtlsAuth call. We
+        // accept arbitrary whitespace/newlines inside setOf(...) but require a literal
+        // setOf with double-quoted string entries.
+        val regex =
+            Regex(
+                """publicPathPrefixes\s*=\s*setOf\(([^)]*)\)""",
+                RegexOption.DOT_MATCHES_ALL,
+            )
+        val match =
+            regex.find(text)
+                ?: error(
+                    "S-20 violation — could not find `publicPathPrefixes = setOf(...)` call in Application.kt. " +
+                        "Either the wiring was removed (mTLS gate is now unconditional — update this test) " +
+                        "or the call site was renamed.",
+                )
+        val literals =
+            Regex("\"([^\"]+)\"").findAll(match.groupValues[1])
+                .map { it.groupValues[1] }
+                .toSet()
+        check(literals == expected) {
+            "S-20 violation — installMtlsAuth public-path allow-list drifted.\n" +
+                "  expected: $expected\n" +
+                "  found:    $literals\n" +
+                "If you intentionally added/removed a public route, update the expected set here AND " +
+                "update SECURITY_SCORECARD.md's Authentication row in the same commit."
+        }
+    }
+
+    /**
+     * **S-21 — `AuditEvent.detailJson` writers never embed row plaintext, DEK bytes, or
+     * key material via string interpolation.**
+     *
+     * The audit chain is intentionally readable for forensics — that means whatever
+     * lands in `detail_json` is visible to any operator with DB read access AND ships
+     * to cold storage. The catalogued writers all construct structured metadata
+     * (`{"endpoint":"…"}`, `{"reason":"…"}`, `{"kid":"…","alg":"…"}`, counts, etc.) but
+     * a future writer that interpolates a row column or an unwrapped DEK into the JSON
+     * would silently leak. This source-grep guards against that drift.
+     *
+     * The check looks for a `detailJson = ` assignment followed (on the same logical
+     * line, with a small lookahead for multi-line raw strings) by an `${…}` template
+     * expression referencing a banned identifier substring. Adding a new safe writer
+     * doesn't trip this; adding `${plaintext}` / `${dek}` / `${row.body}` does.
+     */
+    @Test
+    fun `S-21 detailJson writers do not interpolate plaintext or key material`() {
+        val sourceRoot = java.nio.file.Paths.get("..").toAbsolutePath().normalize()
+        check(java.nio.file.Files.isDirectory(sourceRoot)) {
+            "S-21 cannot locate security-service repo root from $sourceRoot"
+        }
+        val violations =
+            java.nio.file.Files.walk(sourceRoot).use { stream ->
+                stream
+                    .filter { java.nio.file.Files.isRegularFile(it) }
+                    .filter { it.fileName.toString().endsWith(".kt") }
+                    .filter { !it.toString().contains("/build/") }
+                    .filter { !it.toString().contains("/test/") }
+                    .toList()
+            }.flatMap { violationsInDetailJsonAssignments(it) }
+        check(violations.isEmpty()) {
+            buildString {
+                appendLine(
+                    "S-21 violation — detailJson MUST NOT carry row plaintext, DEK bytes, or key " +
+                        "material. The audit chain is operator-readable + ships to cold storage; " +
+                        "anything in detail_json is effectively public to whoever can read the audit log.",
+                )
+                appendLine("Offenders:")
+                violations.forEach { appendLine("  $it") }
+            }
+        }
+    }
+
+    private fun violationsInDetailJsonAssignments(path: java.nio.file.Path): List<String> {
+        val text = java.nio.file.Files.readString(path)
+        return S21_DETAIL_JSON_ASSIGNMENT
+            .findAll(text)
+            .flatMap { match -> violationsInAssignmentMatch(path, text, match) }
+            .toList()
+    }
+
+    private fun violationsInAssignmentMatch(
+        path: java.nio.file.Path,
+        text: String,
+        match: MatchResult,
+    ): List<String> {
+        val window = match.value.lowercase()
+        val lineNumber = text.substring(0, match.range.first).count { it == '\n' } + 1
+        return S21_BANNED_SUBSTRINGS
+            .filter { banned -> Regex("""\$\{[^}]*$banned[^}]*\}""").containsMatchIn(window) }
+            .map { banned ->
+                "${path.fileName}:$lineNumber  banned token \"$banned\" " +
+                    "interpolated into detailJson"
+            }
+    }
+
+    private companion object {
+        // `detailJson = ...` then up to ~400 chars within the same logical expression.
+        // Generous window so multi-line raw strings + line continuations don't escape.
+        private val S21_DETAIL_JSON_ASSIGNMENT =
+            Regex("""detailJson\s*=\s*[^,)]{0,400}""", RegexOption.DOT_MATCHES_ALL)
+
+        // Banned identifier substrings (case-insensitive). Mirrors operator-CLI S-19 set
+        // plus key-material names that should never appear in audit writes.
+        private val S21_BANNED_SUBSTRINGS =
+            listOf(
+                "plaintext",
+                "decrypted",
+                "unwrapped",
+                "dekbytes",
+                "deksecret",
+                "privatekeybytes",
+                "wrappedprivatekey",
+                "clearbytes",
+            )
+    }
 }

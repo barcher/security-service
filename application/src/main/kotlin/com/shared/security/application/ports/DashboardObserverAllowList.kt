@@ -25,15 +25,17 @@ class StaticDashboardObserverAllowList(
 
     companion object {
         /**
-         * Load the allow-list from `SECURITY_DASHBOARD_OBSERVER_SUBJECTS`. Same parsing
-         * convention as [StaticAdminAllowList.fromEnv]: split on `;` first (because each
-         * RFC2253 DN contains commas), fall back to `,` only when no `;` is present.
+         * Load the allow-list from `SECURITY_DASHBOARD_OBSERVER_SUBJECTS`. Splits on `;`
+         * only. The previous variant fell back to `,` when no `;` was present, which was
+         * an operator-trap: a single RFC 2253 DN contains commas internally, so the
+         * fallback would shred it into fragments and the allow-list would silently reject
+         * every caller. With `;`-only the single-DN case works without any separator and
+         * the multi-DN case is unambiguous. Matches [StaticAdminAllowList.fromEnv].
          */
         fun fromEnv(): StaticDashboardObserverAllowList {
             val raw = System.getenv("SECURITY_DASHBOARD_OBSERVER_SUBJECTS") ?: ""
-            val sep = if (raw.contains(';')) ";" else ","
             val entries =
-                raw.split(sep)
+                raw.split(";")
                     .map { it.trim() }
                     .filter { it.isNotBlank() }
                     .toSet()

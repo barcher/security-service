@@ -64,6 +64,8 @@ class KekEnvelopeAdapterTest {
             override suspend fun findById(id: String) = null
 
             override suspend fun retirePrior(id: String) = false
+
+            override suspend fun findAll() = emptyList<KekRecord>()
         }
 
     private val adapter = KekEnvelopeAdapter(fakeCryptoService, fakeKekRepository)

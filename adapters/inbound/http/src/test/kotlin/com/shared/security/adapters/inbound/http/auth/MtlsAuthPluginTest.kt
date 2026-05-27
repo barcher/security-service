@@ -155,11 +155,12 @@ class MtlsAuthPluginTest {
         }
 
     @Test
-    fun `health endpoint without auth still 401s under MtlsAuth (auth is unconditional)`() =
+    fun `health endpoint without auth 401s when not on public allow-list (default behavior)`() =
         testApplication {
             val audit = RecordingAuditLog()
             application {
                 install(ContentNegotiation) { json() }
+                // Default install — empty publicPathPrefixes — every route is gated.
                 installMtlsAuth(extractor = DenyAllPeerCertChainExtractor(), auditLog = audit)
                 routing {
                     get("/v1/health") { call.respond(HttpStatusCode.OK, mapOf("status" to "ok")) }
@@ -168,8 +169,80 @@ class MtlsAuthPluginTest {
 
             val response = client.get("/v1/health")
 
-            // Auth gate is unconditional — even /v1/health requires mTLS.
-            // (In prod the health probe runs over the same mTLS channel as everything else.)
+            assertEquals(HttpStatusCode.Unauthorized, response.status)
+        }
+
+    @Test
+    fun `public allow-listed path is reachable without any client cert`() =
+        testApplication {
+            val audit = RecordingAuditLog()
+            application {
+                install(ContentNegotiation) { json() }
+                installMtlsAuth(
+                    extractor = DenyAllPeerCertChainExtractor(),
+                    auditLog = audit,
+                    publicPathPrefixes = setOf("/v1/jwks", "/v1/health"),
+                )
+                routing {
+                    get("/v1/jwks") { call.respond(HttpStatusCode.OK, mapOf("keys" to emptyList<String>())) }
+                    get("/v1/health") { call.respond(HttpStatusCode.OK, mapOf("status" to "ok")) }
+                }
+            }
+
+            val jwks = client.get("/v1/jwks")
+            val health = client.get("/v1/health")
+
+            assertEquals(HttpStatusCode.OK, jwks.status)
+            assertEquals(HttpStatusCode.OK, health.status)
+            // Allow-list bypass MUST NOT write an MTLS_REJECTED audit event.
+            assertEquals(0, audit.events.size)
+        }
+
+    @Test
+    fun `non-allow-listed path is still 401 even when allow-list is configured`() =
+        testApplication {
+            val audit = RecordingAuditLog()
+            application {
+                install(ContentNegotiation) { json() }
+                installMtlsAuth(
+                    extractor = DenyAllPeerCertChainExtractor(),
+                    auditLog = audit,
+                    publicPathPrefixes = setOf("/v1/jwks", "/v1/health"),
+                )
+                routing {
+                    get("/v1/dek/unwrap") { call.respond(HttpStatusCode.OK, mapOf("ok" to true)) }
+                }
+            }
+
+            val response = client.get("/v1/dek/unwrap")
+
+            assertEquals(HttpStatusCode.Unauthorized, response.status)
+            assertTrue(response.bodyAsText().contains("mtls_required"))
+            assertEquals(1, audit.events.size)
+            assertEquals(AuditEventType.MTLS_REJECTED, audit.events.first().eventType)
+        }
+
+    @Test
+    fun `allow-list matches prefix exactly, not as substring`() =
+        testApplication {
+            // `/v1/jwks-other` must NOT match the `/v1/jwks` allow-list entry — startsWith on a
+            // bare prefix would mis-match; the implementation requires either exact equality
+            // or a `/` or `?` boundary after the prefix.
+            val audit = RecordingAuditLog()
+            application {
+                install(ContentNegotiation) { json() }
+                installMtlsAuth(
+                    extractor = DenyAllPeerCertChainExtractor(),
+                    auditLog = audit,
+                    publicPathPrefixes = setOf("/v1/jwks"),
+                )
+                routing {
+                    get("/v1/jwks-other") { call.respond(HttpStatusCode.OK, mapOf("ok" to true)) }
+                }
+            }
+
+            val response = client.get("/v1/jwks-other")
+
             assertEquals(HttpStatusCode.Unauthorized, response.status)
         }
 }

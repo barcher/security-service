@@ -51,12 +51,15 @@ ENV JAVA_TOOL_OPTIONS="-XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMe
 
 USER secuser
 
-EXPOSE 8443
+# 8443: mTLS-required lane (operational + admin + observability + JWT sign).
+# 8442: public lane (no mTLS) — /v1/jwks + /v1/health only. Consumed by JWKS caches.
+EXPOSE 8443 8442
 
-# Health probe: the service requires mTLS on every endpoint including /v1/health, so this
-# probe uses the server's own cert against the in-container CA bundle. Stream-E secrets
-# layout mounts the CA + a probe client cert at /run/secrets/security-service/.
+# Health probe targets the PUBLIC lane on 8442 so it doesn't need a client cert —
+# the previous probe relied on `--no-check-certificate` reaching an mTLS-required
+# endpoint, which works in dev only because Ktor's plaintext fallback served /v1/health
+# without TLS. With both connectors live, 8442 is the right target.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider --no-check-certificate https://localhost:8443/v1/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider --no-check-certificate https://localhost:8442/v1/health || exit 1
 
 ENTRYPOINT ["./bin/infrastructure"]

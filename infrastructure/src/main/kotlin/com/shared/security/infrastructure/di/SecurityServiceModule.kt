@@ -196,9 +196,15 @@ val securityServiceModule =
         // distinct env var; same database. The observability use cases share the existing
         // audit-write port and add a dedicated read-side AuditLogQueryPort.
         single<com.shared.security.application.ports.DashboardObserverAllowList> {
+            // Same separator convention as SECURITY_ADMIN_SUBJECTS: split on `;` only.
+            // The comma-fallback that lived here previously was an operator-trap because
+            // a single RFC 2253 DN (e.g. `L=Local,O=WorkAutomations,CN=...`) contains
+            // commas internally, so the fallback shredded it into useless fragments and
+            // the allow-list silently rejected every legitimate caller. With `;`-only,
+            // a single-DN value works (no separator needed) AND multi-DN values are
+            // unambiguous.
             val raw = System.getenv("SECURITY_DASHBOARD_OBSERVER_SUBJECTS").orEmpty()
-            val sep = if (raw.contains(';')) ";" else ","
-            val subjects = raw.split(sep).map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+            val subjects = raw.split(";").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
             logger.info(
                 "DashboardObserverAllowList → StaticDashboardObserverAllowList(size=${subjects.size})",
             )

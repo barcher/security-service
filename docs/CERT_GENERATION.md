@@ -10,15 +10,42 @@
 
 ## The fastest path — run the script
 
+The script ([`../scripts/init-dev-certs.sh`](../scripts/init-dev-certs.sh)) does
+everything below in one command. Its operator-facing README lives **collocated with the
+script** at [`../scripts/README.md`](../scripts/README.md); read it first if you need to
+know which `--export-*` flag to use. The two docs share the same lane table (this doc =
+the *recipe*; the script README = the *runbook*).
+
 ```bash
-# From security-service/
+# From security-service/. Standard dev setup — operational lane for the monolith.
 ./scripts/init-dev-certs.sh --export-monolith-client-to ../scaffold/secrets
+
+# To also wire dashboard observability (separate cert, separate DN):
+./scripts/init-dev-certs.sh --export-observer-to ../scaffold/secrets
+
+# To see every available lane + its DN + filenames without writing anything:
+./scripts/init-dev-certs.sh --list-lanes
 ```
 
-That's it. The script is idempotent (re-running is a no-op for existing files; pass
-`--force` to overwrite). It performs every step documented below: CA + server cert +
-truststore + monolith client cert + audit HMAC key, and copies the three monolith-facing
-files (`monolith-client.pem`, `monolith-client.key`, `ca.pem`) into `scaffold/secrets/`.
+The script is idempotent (re-running is a no-op for existing files; pass `--force` to
+overwrite). It performs every step documented below: CA + server cert + truststore +
+client certs per lane + audit HMAC key.
+
+### Lane table
+
+| Lane                    | Flag                                  | Client cert filename               | Subject DN (`-subj` order)                                              | Consumer env vars                                       |
+|-------------------------|---------------------------------------|------------------------------------|-------------------------------------------------------------------------|---------------------------------------------------------|
+| Operational (monolith)  | `--export-monolith-client-to <dir>`   | `monolith-client.pem`              | `/CN=monolith/O=WorkAutomations/L=Local`                                | scaffold: `SECURITY_SERVICE_CLIENT_{CERT,KEY,CA}_PATH`  |
+| Operational (financial) | `--export-financial-client-to <dir>`  | `financial-to-security-client.pem` | `/CN=financial-app/O=WorkAutomations/L=Local`                           | financial: `SECURITY_SERVICE_CLIENT_{CERT,KEY,CA}_PATH` |
+| Dashboard observer      | `--export-observer-to <dir>`          | `dashboard-observer.pem`           | `/CN=workautomations-dashboard-observer/O=WorkAutomations/L=Local`      | scaffold: `SECURITY_READONLY_CLIENT_{CERT,KEY,CA}_PATH` |
+| Admin (operator)        | `--export-admin-to <dir>`             | `admin-bootstrap-client.pem`       | `/CN=workautomations-admin-bootstrap/O=WorkAutomations/L=Local`         | operator-only — `curl --cert` for `POST /v1/admin/rotate-kek` |
+
+**Subject-DN reversal at runtime.** The JDK renders `X500Principal.name` in RFC 2253
+which reverses the `-subj` order. Every security-service allow-list env var consumes
+the reversed form. Example: monolith operational lane is configured with
+`-subj "/CN=monolith/O=WorkAutomations/L=Local"` but the security-service sees
+`L=Local,O=WorkAutomations,CN=monolith` and that's what must appear in its allow-list
+configuration. The same applies to the observer DN (`L=Local,O=WorkAutomations,CN=workautomations-dashboard-observer`).
 
 The rest of this doc is the manual recipe — useful for reviewing what the script does,
 for non-standard layouts, or for issuing additional client certs (e.g. operator admin
@@ -166,6 +193,54 @@ SECURITY_ADMIN_SUBJECTS=CN=admin-1,O=WorkAutomations,L=Local
 ```
 
 (RFC 2253 DN form; semicolon-separated when multiple admin DNs are configured.)
+
+## Step 5b — dashboard observer client cert
+
+The dashboard observer lane is a **separate** mTLS lane from the operational one, with a
+**distinct subject DN** so the security-service can authorize observability reads
+without ever authorizing the operational verbs (or vice versa). The cert lives in
+`scaffold/secrets/` alongside the operational `monolith-client.*` — but the filenames
+are different (`dashboard-observer.*`) and the consumer env vars are different
+(`SECURITY_READONLY_*` rather than `SECURITY_SERVICE_CLIENT_*`).
+
+```bash
+# From security-service/secrets/. Distinct DN — note the CN.
+openssl ecparam -name secp384r1 -genkey -noout -out dashboard-observer.key
+
+openssl req -new -key dashboard-observer.key -sha384 \
+    -subj "/CN=workautomations-dashboard-observer/O=WorkAutomations/L=Local" \
+    -out dashboard-observer.csr
+
+openssl x509 -req -in dashboard-observer.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+    -days 365 -sha384 -out dashboard-observer.pem
+
+openssl pkcs8 -topk8 -nocrypt -in dashboard-observer.key -out dashboard-observer-pkcs8.key
+mv dashboard-observer-pkcs8.key dashboard-observer.key
+
+cp dashboard-observer.pem ../../scaffold/secrets/dashboard-observer.pem
+cp dashboard-observer.key ../../scaffold/secrets/dashboard-observer.key
+# ca.pem is already in scaffold/secrets/ from Step 4.
+```
+
+Wire into `scaffold/.env`:
+
+```env
+SECURITY_SERVICE_READONLY_URL=https://localhost:8443
+SECURITY_READONLY_CLIENT_CERT_PATH=./secrets/dashboard-observer.pem
+SECURITY_READONLY_CLIENT_KEY_PATH=./secrets/dashboard-observer.key
+SECURITY_READONLY_CA_PATH=./secrets/ca.pem
+```
+
+And on `security-app` — add the observer DN to its allow-list env var (note the
+RFC 2253 reversal — see the "Subject-DN reversal at runtime" note at the top of this doc):
+
+```env
+SECURITY_DASHBOARD_OBSERVER_SUBJECTS=L=Local,O=WorkAutomations,CN=workautomations-dashboard-observer
+```
+
+If the DN doesn't match exactly (case + comma spacing + attribute order), the
+security-service returns HTTP 403 + `OBSERVER_FORBIDDEN` on every `/v1/observability/*`
+call. See [`OBSERVABILITY_API.md`](OBSERVABILITY_API.md) for the full lane contract.
 
 ## Step 6 — ML-KEM keypair + audit HMAC key
 
