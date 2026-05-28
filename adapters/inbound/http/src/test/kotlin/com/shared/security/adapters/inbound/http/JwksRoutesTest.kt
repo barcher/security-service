@@ -38,17 +38,25 @@ class JwksRoutesTest {
 
         override suspend fun insertStaged(record: JwtSigningKeyRecord) = error("not used")
 
-        override suspend fun activate(kid: ByteArray, now: Instant): Boolean = error("not used")
+        override suspend fun activate(
+            kid: ByteArray,
+            now: Instant,
+        ): Boolean = error("not used")
 
-        override suspend fun quiescePrior(kid: ByteArray, now: Instant): Boolean = error("not used")
+        override suspend fun quiescePrior(
+            kid: ByteArray,
+            now: Instant,
+        ): Boolean = error("not used")
 
-        override suspend fun retireQuiesced(kid: ByteArray, now: Instant, retentionDays: Long): Boolean =
-            error("not used")
+        override suspend fun retireQuiesced(
+            kid: ByteArray,
+            now: Instant,
+            retentionDays: Long,
+        ): Boolean = error("not used")
 
         override suspend fun deleteRetired(kid: ByteArray): Boolean = error("not used")
 
-        override suspend fun findRetiredEligibleForDelete(now: Instant): List<JwtSigningKeyRecord> =
-            error("not used")
+        override suspend fun findRetiredEligibleForDelete(now: Instant): List<JwtSigningKeyRecord> = error("not used")
 
         override suspend fun findAll(): List<JwtSigningKeyRecord> = error("not used")
     }
@@ -58,10 +66,16 @@ class JwksRoutesTest {
 
         override fun generateKeyPair(): GeneratedKeyPair = error("not used")
 
-        override fun sign(privateKeyPkcs8: ByteArray, payload: ByteArray): ByteArray = error("not used")
+        override fun sign(
+            privateKeyPkcs8: ByteArray,
+            payload: ByteArray,
+        ): ByteArray = error("not used")
 
-        override fun verify(publicKeySpki: ByteArray, payload: ByteArray, signature: ByteArray): Boolean =
-            error("not used")
+        override fun verify(
+            publicKeySpki: ByteArray,
+            payload: ByteArray,
+            signature: ByteArray,
+        ): Boolean = error("not used")
 
         override fun computeKid(publicKeySpki: ByteArray): ByteArray = error("not used")
     }
@@ -94,8 +108,7 @@ class JwksRoutesTest {
         }
     }
 
-    private fun ApplicationTestBuilder.jsonClient() =
-        createClient { install(ClientContentNegotiation) { json() } }
+    private fun ApplicationTestBuilder.jsonClient() = createClient { install(ClientContentNegotiation) { json() } }
 
     @Test
     fun `GET v1 jwks returns 200 with the publishable key set and cache header`() =
@@ -160,5 +173,4 @@ class JwksRoutesTest {
                 assertEquals(HttpStatusCode.OK, response.status)
             }
         }
-
 }
