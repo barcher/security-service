@@ -5,6 +5,7 @@ import com.shared.security.adapters.inbound.http.auth.PeerCertChainExtractor
 import com.shared.security.adapters.inbound.http.auth.SslHandshakeExceptionHandler
 import com.shared.security.adapters.inbound.http.auth.installMtlsAuth
 import com.shared.security.adapters.inbound.http.installAdminRoutes
+import com.shared.security.adapters.inbound.http.installBlindIndexRoutes
 import com.shared.security.adapters.inbound.http.installCryptoRoutes
 import com.shared.security.adapters.inbound.http.installHealthRoute
 import com.shared.security.adapters.inbound.http.installJwksRoutes
@@ -308,6 +309,8 @@ fun Application.securityModule() {
     val getKeyStatus by inject<GetKeyStatusUseCase>()
     val adminAllowList by inject<AdminAllowList>()
     val signJwt by inject<SignJwtUseCase>()
+    val computeEmailBlindIndex by
+        inject<com.shared.security.application.usecases.blindindex.ComputeEmailBlindIndexUseCase>()
     val jwtSigningKeyRepo by inject<JwtSigningKeyRepository>()
     val jwtSigningPort by inject<JwtSigningKeyPort>()
     val observerAllowList by inject<com.shared.security.application.ports.DashboardObserverAllowList>()
@@ -365,6 +368,7 @@ fun Application.securityModule() {
             getKeyStatus = getKeyStatus,
         )
         installJwtSignRoutes(signJwt = signJwt)
+        installBlindIndexRoutes(computeEmailBlindIndex = computeEmailBlindIndex)
         // JWKS is unauthenticated; rate-limit per-IP to prevent abuse. Consumers cache the
         // JWKS for 5 minutes and only refetch on `kid` miss, so a generous per-IP cap is
         // safe. Hardcoded here (not env-tunable yet) — promote to RateLimitConfig if/when

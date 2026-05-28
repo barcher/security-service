@@ -287,7 +287,13 @@ class SecurityBoundaryArchTest {
         val expected = setOf("/v1/jwks", "/v1/health")
         val sourceFile =
             java.nio.file.Paths.get(
-                "src", "main", "kotlin", "com", "shared", "security", "infrastructure",
+                "src",
+                "main",
+                "kotlin",
+                "com",
+                "shared",
+                "security",
+                "infrastructure",
                 "Application.kt",
             )
         check(java.nio.file.Files.exists(sourceFile)) {
@@ -363,6 +369,33 @@ class SecurityBoundaryArchTest {
                 appendLine("Offenders:")
                 violations.forEach { appendLine("  $it") }
             }
+        }
+    }
+
+    /**
+     * **S-22 — the email blind-index route never logs.** The plaintext email arrives over
+     * the wire purely to be HMAC'd; it must never reach a logger (an INFO/DEBUG line
+     * carrying the email would defeat the encryption-at-rest the blind index protects).
+     * `BlindIndexRoutes.kt` must contain no logger reference at all — the simplest
+     * enforceable invariant, since the route has no legitimate logging need.
+     */
+    @Test
+    fun `S-22 blind-index route file references no logger`() {
+        val sourceRoot = java.nio.file.Paths.get("..").toAbsolutePath().normalize()
+        val routeFile =
+            java.nio.file.Files.walk(sourceRoot).use { stream ->
+                stream
+                    .filter { it.fileName.toString() == "BlindIndexRoutes.kt" }
+                    .filter { !it.toString().contains("/build/") }
+                    .toList()
+            }.singleOrNull()
+        check(routeFile != null) { "S-22 cannot locate BlindIndexRoutes.kt under $sourceRoot" }
+        val text = java.nio.file.Files.readString(routeFile)
+        val loggerTokens = listOf("LoggerFactory", "log.", "logger.", "println(", "System.out", "System.err")
+        val offenders = loggerTokens.filter { text.contains(it) }
+        check(offenders.isEmpty()) {
+            "S-22 violation — BlindIndexRoutes.kt references a logger ($offenders). The plaintext " +
+                "email must never be logged; remove all logging from this route file."
         }
     }
 

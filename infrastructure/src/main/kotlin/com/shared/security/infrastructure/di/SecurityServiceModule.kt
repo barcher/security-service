@@ -8,6 +8,7 @@ import com.shared.security.adapters.outbound.crypto.KekEnvelopeAdapter
 import com.shared.security.adapters.outbound.crypto.MlKemCryptoKeyService
 import com.shared.security.adapters.outbound.crypto.NoOpCryptoKeyService
 import com.shared.security.adapters.outbound.jwtsigning.Es256JwtSigningKeyAdapter
+import com.shared.security.adapters.outbound.persistence.ExposedEmailLookupHmacKeyRepository
 import com.shared.security.adapters.outbound.persistence.ExposedJwtSigningKeyRepository
 import com.shared.security.adapters.outbound.persistence.ExposedKekRepository
 import com.shared.security.adapters.outbound.persistence.SecurityDatabase
@@ -19,6 +20,7 @@ import com.shared.security.adapters.outbound.persistence.audit.ExposedAuditLogRe
 import com.shared.security.application.ports.AdminAllowList
 import com.shared.security.application.ports.AuditLogPort
 import com.shared.security.application.ports.CryptoKeyServicePort
+import com.shared.security.application.ports.EmailLookupHmacKeyRepository
 import com.shared.security.application.ports.JwtAudienceAllowList
 import com.shared.security.application.ports.JwtSigningKeyRepository
 import com.shared.security.application.ports.KekEnvelopePort
@@ -30,6 +32,7 @@ import com.shared.security.application.usecases.GetKeyStatusUseCase
 import com.shared.security.application.usecases.RewrapDekUseCase
 import com.shared.security.application.usecases.UnwrapDekUseCase
 import com.shared.security.application.usecases.WrapDekUseCase
+import com.shared.security.application.usecases.blindindex.ComputeEmailBlindIndexUseCase
 import com.shared.security.application.usecases.jwt.ActivateJwtSigningKeyUseCase
 import com.shared.security.application.usecases.jwt.GenerateJwtSigningKeyPairUseCase
 import com.shared.security.application.usecases.jwt.JwtSigningKeyPort
@@ -172,6 +175,14 @@ val securityServiceModule =
         single<JwtAudienceAllowList> {
             EnvJwtAudienceAllowList(System.getenv("SECURITY_JWT_AUDIENCE_ALLOWLIST"))
         }
+        single<EmailLookupHmacKeyRepository> {
+            val db =
+                requireNotNull(getOrNull<SecurityDatabase>()) {
+                    "Email blind-index layer requires SECURITY_DB_ENABLED=true"
+                }
+            ExposedEmailLookupHmacKeyRepository(db.database)
+        }
+        single { ComputeEmailBlindIndexUseCase(get(), get()) }
         single { GenerateJwtSigningKeyPairUseCase(get(), get(), get(), get()) }
         single { ActivateJwtSigningKeyUseCase(get(), get()) }
         single { SignJwtUseCase(get(), get(), get(), get(), get()) }
