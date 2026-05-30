@@ -37,7 +37,9 @@ ktor {
 dependencies {
     implementation(project(":domain"))
     implementation(project(":application"))
+    implementation(project(":contracts:oauth-oidc"))
     implementation(project(":adapters:inbound:http"))
+    implementation(project(":adapters:inbound:http-oauth"))
     implementation(project(":adapters:inbound:scheduler"))
     implementation(project(":adapters:outbound:persistence"))
     implementation(libs.exposed.core)

@@ -109,6 +109,8 @@ class DocsAllowlistTest {
                 "OBSERVABILITY_API.md",
                 "OPERATOR_DECRYPT_RUNBOOK.md",
                 "AUDIT_SHIPPER_RUNBOOK.md",
+                "ACCESS_CONTROL_POLICY.md",
+                "INFORMATION_SECURITY_POLICY.md",
             )
     }
 }

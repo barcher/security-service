@@ -283,8 +283,13 @@ class SecurityBoundaryArchTest {
      * the routing layer respects the gate — `MtlsAuthPluginTest` covers behavior.
      */
     @Test
-    fun `S-20 installMtlsAuth public path allow-list is exactly the two documented routes`() {
-        val expected = setOf("/v1/jwks", "/v1/health")
+    fun `S-20 installMtlsAuth public path allow-list is exactly the documented public routes`() {
+        // Three public routes: the two key/health endpoints plus OIDC discovery (advertises
+        // only public endpoint/feature metadata; jwks_uri points at /v1/jwks). The discovery
+        // path is wired via the symbolic constant OidcProviderConfig.DISCOVERY_PATH rather
+        // than a string literal, so this test resolves that symbol to its known value before
+        // comparing.
+        val expected = setOf("/v1/jwks", "/v1/health", "/.well-known/openid-configuration")
         val sourceFile =
             java.nio.file.Paths.get(
                 "src",
@@ -315,10 +320,16 @@ class SecurityBoundaryArchTest {
                         "Either the wiring was removed (mTLS gate is now unconditional — update this test) " +
                         "or the call site was renamed.",
                 )
+        val args = match.groupValues[1]
         val literals =
-            Regex("\"([^\"]+)\"").findAll(match.groupValues[1])
+            Regex("\"([^\"]+)\"").findAll(args)
                 .map { it.groupValues[1] }
-                .toSet()
+                .toMutableSet()
+        // Resolve the symbolic discovery-path constant if it appears in the call (it is not a
+        // double-quoted literal). The value is fixed in OidcProviderConfig.DISCOVERY_PATH.
+        if (args.contains("OidcProviderConfig.DISCOVERY_PATH")) {
+            literals.add("/.well-known/openid-configuration")
+        }
         check(literals == expected) {
             "S-20 violation — installMtlsAuth public-path allow-list drifted.\n" +
                 "  expected: $expected\n" +

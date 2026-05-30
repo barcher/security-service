@@ -6,6 +6,7 @@ import com.shared.security.adapters.outbound.persistence.tables.KekStatus
 import com.shared.security.adapters.outbound.persistence.tables.KeksTable
 import kotlinx.datetime.Clock
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.deleteAll
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.statements.api.ExposedBlob
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
@@ -51,6 +53,19 @@ class SecurityFlywayMigrationTest {
     fun tearDown() {
         db.close()
         mysql.stop()
+    }
+
+    // PER_CLASS shares one container/DB across methods, so isolate each test's data.
+    // The `keks` "one ACTIVE row" unique index (uk_keks_one_active) otherwise makes the
+    // tests order-dependent: an ACTIVE kek left by one method collides with the next.
+    // Delete in FK-safe order (deks references keks).
+    @BeforeEach
+    fun cleanState() {
+        transaction(db.database) {
+            DeksTable.deleteAll()
+            KeksTable.deleteAll()
+            AuditEventsTable.deleteAll()
+        }
     }
 
     @Test

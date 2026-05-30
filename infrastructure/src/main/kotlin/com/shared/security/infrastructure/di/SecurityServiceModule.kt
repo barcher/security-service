@@ -8,10 +8,12 @@ import com.shared.security.adapters.outbound.crypto.KekEnvelopeAdapter
 import com.shared.security.adapters.outbound.crypto.MlKemCryptoKeyService
 import com.shared.security.adapters.outbound.crypto.NoOpCryptoKeyService
 import com.shared.security.adapters.outbound.jwtsigning.Es256JwtSigningKeyAdapter
+import com.shared.security.adapters.outbound.persistence.ExposedAuthorizationCodeRepository
 import com.shared.security.adapters.outbound.persistence.ExposedEmailLookupHmacKeyRepository
 import com.shared.security.adapters.outbound.persistence.ExposedFinancialDedupHmacKeyRepository
 import com.shared.security.adapters.outbound.persistence.ExposedJwtSigningKeyRepository
 import com.shared.security.adapters.outbound.persistence.ExposedKekRepository
+import com.shared.security.adapters.outbound.persistence.ExposedOAuthClientRepository
 import com.shared.security.adapters.outbound.persistence.SecurityDatabase
 import com.shared.security.adapters.outbound.persistence.SecurityDatabaseConfig
 import com.shared.security.adapters.outbound.persistence.SecurityFlywayMigrator
@@ -20,6 +22,7 @@ import com.shared.security.adapters.outbound.persistence.audit.AuditHmacKeyProvi
 import com.shared.security.adapters.outbound.persistence.audit.ExposedAuditLogRepository
 import com.shared.security.application.ports.AdminAllowList
 import com.shared.security.application.ports.AuditLogPort
+import com.shared.security.application.ports.AuthorizationCodeRepository
 import com.shared.security.application.ports.CryptoKeyServicePort
 import com.shared.security.application.ports.EmailLookupHmacKeyRepository
 import com.shared.security.application.ports.FinancialDedupHmacKeyRepository
@@ -27,6 +30,8 @@ import com.shared.security.application.ports.JwtAudienceAllowList
 import com.shared.security.application.ports.JwtSigningKeyRepository
 import com.shared.security.application.ports.KekEnvelopePort
 import com.shared.security.application.ports.KekRepository
+import com.shared.security.application.ports.OAuthClientRegistry
+import com.shared.security.application.ports.OAuthClientStore
 import com.shared.security.application.ports.StaticAdminAllowList
 import com.shared.security.application.usecases.GenerateDekUseCase
 import com.shared.security.application.usecases.GenerateNewKekPairUseCase
@@ -43,9 +48,13 @@ import com.shared.security.application.usecases.jwt.RunJwtSigningKeyHealthCheckU
 import com.shared.security.application.usecases.jwt.RunJwtSigningKeyPriorTtlUseCase
 import com.shared.security.application.usecases.jwt.RunJwtSigningKeyRetentionUseCase
 import com.shared.security.application.usecases.jwt.SignJwtUseCase
+import com.shared.security.application.usecases.oauth.BuildOidcDiscoveryUseCase
+import com.shared.security.application.usecases.oauth.OidcProviderConfig
+import com.shared.security.application.usecases.oauth.SeedOAuthClientsUseCase
 import com.shared.security.infrastructure.audit.Slf4jAuditLogAdapter
 import com.shared.security.infrastructure.config.EnvJwtAudienceAllowList
 import com.shared.security.infrastructure.config.RateLimitConfig
+import com.shared.security.infrastructure.oauth.OAuthClientSeed
 import com.shared.security.infrastructure.tls.MtlsConfig
 import kotlinx.datetime.Clock
 import org.koin.dsl.module
@@ -251,6 +260,32 @@ val securityServiceModule =
             com.shared.security.application.usecases.observation.ListRecentRotationsObservationUseCase(get(), get())
         }
 
+        // ── OAuth/OIDC provider skeleton — discovery + static client registry ──────────────
+        //
+        // Wires the provider's foundation: the OIDC discovery use case and the static client
+        // registry (read + provisioning) over the new oauth_clients / authorization_codes
+        // tables. No grant handler is wired yet — /token + /authorize land in later phases.
+        // The discovery jwks_uri points at the existing GET /v1/jwks (one JWKS, R-10).
+        single { OidcProviderConfig(resolveOidcIssuer()) }
+        single { BuildOidcDiscoveryUseCase(get()) }
+        single {
+            val db =
+                requireNotNull(getOrNull<SecurityDatabase>()) {
+                    "OAuth client registry requires SECURITY_DB_ENABLED=true"
+                }
+            ExposedOAuthClientRepository(db.database)
+        }
+        single<OAuthClientRegistry> { get<ExposedOAuthClientRepository>() }
+        single<OAuthClientStore> { get<ExposedOAuthClientRepository>() }
+        single<AuthorizationCodeRepository> {
+            val db =
+                requireNotNull(getOrNull<SecurityDatabase>()) {
+                    "OAuth authorization-code store requires SECURITY_DB_ENABLED=true"
+                }
+            ExposedAuthorizationCodeRepository(db.database)
+        }
+        single { SeedOAuthClientsUseCase(get<OAuthClientStore>(), OAuthClientSeed.firstPartyClients()) }
+
         // ── Stream C follow-up SHIP-01..02 — audit-shipper, retention, kek-backup wiring ───
         //
         // NoOp adapters until SHIP-03 + SHIP-04 land real R2/S3 implementations. The use cases
@@ -418,6 +453,26 @@ private const val DEFAULT_RETENTION_DAYS: Long = 2557L // 7 years — FedRAMP AU
 private const val JWT_PRIOR_TTL_HOURS: Long = 24L
 private const val JWT_QUIESCED_RETENTION_HOURS: Long = 24L
 private const val JWT_RETIRED_RETENTION_DAYS: Long = 90L
+
+/**
+ * Resolve the OIDC issuer (the externally-reachable provider base URL) from
+ * `SECURITY_OIDC_ISSUER`, falling back to a loud dev default. The issuer is the
+ * `security-ops.*` hostname in production; discovery derives every advertised endpoint from
+ * it. A trailing slash is rejected by [OidcProviderConfig]; trim one defensively here.
+ */
+private fun resolveOidcIssuer(): String {
+    val raw = System.getenv("SECURITY_OIDC_ISSUER")?.trim()?.trimEnd('/')
+    if (raw.isNullOrBlank()) {
+        logger.warn(
+            "SECURITY_OIDC_ISSUER unset — OIDC discovery will advertise the dev default " +
+                "'$DEV_OIDC_ISSUER'. Set it to the security-ops.* base URL in any deployed environment.",
+        )
+        return DEV_OIDC_ISSUER
+    }
+    return raw
+}
+
+private const val DEV_OIDC_ISSUER = "https://localhost:8443"
 
 /**
  * Build the shared [SecurityDatabase] instance once, or return null when DB-backed mode is

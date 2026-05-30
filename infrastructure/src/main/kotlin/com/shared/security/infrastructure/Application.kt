@@ -12,6 +12,7 @@ import com.shared.security.adapters.inbound.http.installJwksRoutes
 import com.shared.security.adapters.inbound.http.installJwtSignRoutes
 import com.shared.security.adapters.inbound.http.installObservabilityRoutes
 import com.shared.security.adapters.inbound.http.ratelimit.PerSubjectRateLimiter
+import com.shared.security.adapters.inbound.oauth.installOidcDiscoveryRoutes
 import com.shared.security.application.ports.AdminAllowList
 import com.shared.security.application.ports.AuditLogPort
 import com.shared.security.application.ports.JwtSigningKeyRepository
@@ -23,6 +24,9 @@ import com.shared.security.application.usecases.UnwrapDekUseCase
 import com.shared.security.application.usecases.WrapDekUseCase
 import com.shared.security.application.usecases.jwt.JwtSigningKeyPort
 import com.shared.security.application.usecases.jwt.SignJwtUseCase
+import com.shared.security.application.usecases.oauth.BuildOidcDiscoveryUseCase
+import com.shared.security.application.usecases.oauth.OidcProviderConfig
+import com.shared.security.application.usecases.oauth.SeedOAuthClientsUseCase
 import com.shared.security.infrastructure.cli.GenerateKekCli
 import com.shared.security.infrastructure.cli.ImportMonolithDeksCli
 import com.shared.security.infrastructure.cli.JwtKeysCli
@@ -326,6 +330,7 @@ fun Application.securityModule() {
         inject<com.shared.security.application.usecases.observation.SearchAuditEventsObservationUseCase>()
     val listRecentRotationsObservation by
         inject<com.shared.security.application.usecases.observation.ListRecentRotationsObservationUseCase>()
+    val buildOidcDiscovery by inject<BuildOidcDiscoveryUseCase>()
     logger.info(
         "Resolved RateLimitConfig: enabled={} capacity={} refillPerSec={} (env vars: {}, {}, {})",
         rateLimitConfig.enabled,
@@ -338,8 +343,26 @@ fun Application.securityModule() {
     installMtlsAuth(
         extractor = extractor,
         auditLog = auditLog,
-        publicPathPrefixes = setOf("/v1/jwks", "/v1/health"),
+        // OIDC discovery is unauthenticated public metadata (like /v1/jwks): it advertises
+        // only endpoint URLs + supported features, never key material. Adding it here is an
+        // auditor-visible change — keep S-20 (Application.kt allow-list test) in sync.
+        publicPathPrefixes = setOf("/v1/jwks", "/v1/health", OidcProviderConfig.DISCOVERY_PATH),
     )
+
+    // OAuth/OIDC provider skeleton — seed the static client registry on boot (idempotent,
+    // insert-if-absent). Runs only in DB-backed mode; in the dev no-DB fallback the seed use
+    // case's store dependency is unresolvable, so we skip seeding loudly rather than crash a
+    // smoke run. No grant handler exists yet; seeding just provisions oauth_clients.
+    runCatching {
+        val seedClients by inject<SeedOAuthClientsUseCase>()
+        val inserted = kotlinx.coroutines.runBlocking { seedClients.seed() }
+        logger.info("OAuth client registry seed complete: {} client(s) newly inserted", inserted)
+    }.onFailure {
+        logger.warn(
+            "OAuth client registry seed skipped (likely SECURITY_DB_ENABLED=false): {}",
+            it.message,
+        )
+    }
 
     // Stream C follow-up SHIP-02 — start the SecurityScheduler. The .start() call is a
     // no-op when SECURITY_SCHEDULER_ENABLED=false (the default for safety — operator opts
@@ -397,5 +420,7 @@ fun Application.securityModule() {
             searchAuditEvents = searchAuditObservation,
             listRecentRotations = listRecentRotationsObservation,
         )
+        // OIDC discovery — public metadata; jwks_uri points at the existing /v1/jwks (R-10).
+        installOidcDiscoveryRoutes(buildDiscovery = buildOidcDiscovery)
     }
 }
