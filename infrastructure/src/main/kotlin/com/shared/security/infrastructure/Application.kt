@@ -311,6 +311,8 @@ fun Application.securityModule() {
     val signJwt by inject<SignJwtUseCase>()
     val computeEmailBlindIndex by
         inject<com.shared.security.application.usecases.blindindex.ComputeEmailBlindIndexUseCase>()
+    val computeFinancialDedupBlindIndex by
+        inject<com.shared.security.application.usecases.blindindex.ComputeFinancialDedupBlindIndexUseCase>()
     val jwtSigningKeyRepo by inject<JwtSigningKeyRepository>()
     val jwtSigningPort by inject<JwtSigningKeyPort>()
     val observerAllowList by inject<com.shared.security.application.ports.DashboardObserverAllowList>()
@@ -368,7 +370,10 @@ fun Application.securityModule() {
             getKeyStatus = getKeyStatus,
         )
         installJwtSignRoutes(signJwt = signJwt)
-        installBlindIndexRoutes(computeEmailBlindIndex = computeEmailBlindIndex)
+        installBlindIndexRoutes(
+            computeEmailBlindIndex = computeEmailBlindIndex,
+            computeFinancialDedupBlindIndex = computeFinancialDedupBlindIndex,
+        )
         // JWKS is unauthenticated; rate-limit per-IP to prevent abuse. Consumers cache the
         // JWKS for 5 minutes and only refetch on `kid` miss, so a generous per-IP cap is
         // safe. Hardcoded here (not env-tunable yet) — promote to RateLimitConfig if/when

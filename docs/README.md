@@ -10,6 +10,10 @@ allowlist fails CI.
 | File | Status | Owner stream | Purpose |
 |------|--------|--------------|---------|
 | `README.md` | ✅ this file | — | Index of allowed files + ownership. |
+| `INFORMATION_SECURITY_POLICY.md` | ✅ written | Governance | Public-facing information security policy. Principle-level only — no algorithms, identifiers, or internal procedures. |
+| `INFORMATION_SECURITY_POLICY.pdf` | ✅ written | Governance | PDF rendering of `INFORMATION_SECURITY_POLICY.md` (same content). |
+| `ACCESS_CONTROL_POLICY.md` | ✅ written | Governance | Public-facing access control policy. Principle-level companion to the information security policy. |
+| `ACCESS_CONTROL_POLICY.pdf` | ✅ written | Governance | PDF rendering of `ACCESS_CONTROL_POLICY.md` (same content). |
 | `MTLS.md` | ✅ written | Stream B → E | mTLS contract, cert generation, `PeerCertChainExtractor` evolution. |
 | `RATE_LIMITING.md` | ✅ written | Stream B → C | Per-subject token bucket on `/v1/dek/unwrap`, env-var contract, scale-out caveats. |
 | `AUDIT_LOG.md` | ✅ written | Stream C | HMAC-SHA-512 row-chain schema + verification protocol from proposal §10. |
